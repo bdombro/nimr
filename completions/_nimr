@@ -1,0 +1,43 @@
+#compdef nimr
+#
+# Copy to ~/.zsh/completions/_nimr (keep the leading underscore).
+# Ensure this runs before compinit, e.g. in ~/.zshrc:
+#   fpath=(~/.zsh/completions $fpath)
+#   autoload -Uz compinit && compinit
+#
+# cligen accepts unambiguous prefixes; full names are offered here.
+
+_nimr() {
+  if (( CURRENT == 2 )); then
+    _alternative \
+      'opts:top-level options:compadd -- -h --help --help-syntax --helpsyntax' \
+      'cmds:commands:compadd -- run cacheClear help'
+    return
+  fi
+
+  case $words[2] in
+    run)
+      if (( CURRENT == 3 )); then
+        _alternative \
+          'help:run help:compadd -- -h --help --helpsyntax' \
+          'files:script:_files'
+      else
+        _default
+      fi
+      ;;
+    cacheClear)
+      if (( CURRENT == 3 )); then
+        compadd -- -h --help --help-syntax --helpsyntax
+      fi
+      ;;
+    help)
+      (( CURRENT == 3 )) && compadd -- run cacheClear
+      ;;
+    -h|--help|--help-syntax|--helpsyntax) ;;
+    *)
+      _default
+      ;;
+  esac
+}
+
+_nimr "$@"
