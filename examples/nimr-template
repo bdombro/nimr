@@ -1,0 +1,263 @@
+#!/usr/bin/env -S nimr run
+
+#[
+  {app name}
+
+  {app description}
+  
+  {app usage}
+
+  Code Standards:
+    - Commands that shell out to non-bundled binaries should check PATH, print install hints, and
+      exit non-zero when required commands are missing.
+    - Multi-word identifiers:
+      - order from general → specific (head-first: main concept, then qualifier)
+      - typically topic → optional subtype/format → measured attribute → limit/qualifier
+      - e.g. statStatusOk, not okStatStatus
+    - Field names:
+      - minimal tokens within the owning type
+      - no repeated type/module/domain prefixes unless required for disambiguation
+    - module-scope (aka top-level, not-nested) declarations (except imports) must be
+      - documented with a doc comment above the declaration
+      - sorted alphabetically by identifier (consts, object types, fields inside exported objects,
+        vars, then procs)
+      - procs: callee before caller when required by the compiler; otherwise alphabetical
+      - prefixed with a short domain token for app features (here ``stat``); use ``core`` for
+        shared CLI/runtime helpers
+    - functions must have a doc comment, and a blank empty line after the function
+    - Function shape:
+      - entry-point and orchestration procs read top-down as a short sequence of named steps
+      - keep the happy path obvious; move mechanics into helpers with intent-revealing names
+    - Helper placement:
+      - prefer nested helpers only for tiny logic tightly coupled to one block
+      - promote helpers to module scope when nesting makes the caller hard to scan, even if the
+        helper currently has one call site
+      - shared by ≥2 call sites → smallest common ancestor (often a private proc at module
+        scope)
+      - must be visible to tests, callbacks, or exports → keep at the level visibility requires
+      - recursion between helpers → shared scope as the language requires
+    - Parameter shape:
+      - if a proc takes more than four primitive or config parameters, prefer an options object
+      - if the same cluster of values passes through multiple layers, define a named type for it
+    - Branching:
+      - materially different pipelines → separate helpers, not interleaved
+      - repeated status literals and sentinels → centralized constants (or enums when suitable)
+    - Assume unix arch and POSIX features are available
+    - Use grab for external library imports
+    - Use cligen for CLI features
+      - default to no shortened flags for newly added options
+    - Use line max-width of 100 characters, unless the line is a code block or a URL
+]#
+
+
+import std/[os, posix, strformat, strutils, terminal, times]
+import grab
+
+grab "cligen"
+
+import cligen
+
+const
+  ## Stored in ``StatRow.status`` for failures.
+  statStatusFailed = "failed"
+  ## Stored in ``StatRow.status`` for successful rows.
+  statStatusOk = "ok"
+  ## Stored in ``StatRow.status`` for skipped rows.
+  statStatusSkipped = "skipped"
+  ## ``dispatchGen`` help: ``doc`` then options only (no ``$command`` / ``$args`` synopsis).
+  statUsageTmpl = "${doc}\nOptions:\n$options"
+
+
+type
+  ## Flags passed through the stat subcommand.
+  StatOptions = object
+    ## CI mode: when true, never prompt for paths if argv lists none (non-interactive).
+    ci: bool
+  ## One row of stat output: path, outcome, optional note, and fields filled when ``statStatusOk``.
+  StatRow* = object
+    bytes*: int64 ## File size in bytes when ok; otherwise zero.
+    lastWrite*: string ## Formatted mtime when ok; otherwise empty.
+    message*: string ## Detail or empty.
+    path*: string ## Path that was examined.
+    status*: string ## ``statStatusOk``, ``statStatusSkipped``, or ``statStatusFailed``.
+
+
+## Global flag set from the SIGINT handler (async-signal-safe).
+var coreInterruptRequested {.global.}: Sig_atomic
+## Cligen ``stat`` help: omit the value-type column (``bool``/``int``/``string``).
+var statClCfg = clCfg
+
+## Narrow cligen help table to keys, defaults, and descriptions only.
+statClCfg.hTabCols = @[clOptKeys, clDflVal, clDescrip]
+
+## Converts a byte count to a floating mebibyte value (base 1024).
+proc coreBytesMbFrom(size: int64): float =
+  float64(size) / 1024.0 / 1024.0
+
+## Forward: body is emitted later by ``dispatchGen`` (``dispatchName = "coreDispatchStat"``).
+proc coreDispatchStat(
+    cmdline: seq[string] = mergeParams(@["nim-template", "stat"]);
+    usage: string = statUsageTmpl; prefix: string = ""; parseOnly: bool = false;
+    skipHelp: bool = false; noHdr: bool = true)
+
+## True when ``e`` looks like interrupt during ``readLine`` (``syncio`` errno 4 ``EINTR`` or macOS
+## errno 5 ``EIO`` on stdin), not an unrelated I/O failure.
+proc coreIoErrorIsPromptCancel(e: ref IOError): bool =
+  e.msg.startsWith("errno: 4 ") or e.msg.startsWith("errno: 5 ")
+
+## SIGINT callback: sets ``coreInterruptRequested`` (keep minimal; async-signal-safe).
+proc coreSigIntHandler(sig: cint) {.noconv.} =
+  coreInterruptRequested = 1
+
+## Installs ``SIGINT`` handling and clears the interrupt flag.
+proc coreInterruptHandlerInstall() =
+  coreInterruptRequested = 0
+  var sa: Sigaction
+  sa.sa_handler = coreSigIntHandler
+  discard sigemptyset(sa.sa_mask)
+  sa.sa_flags = 0
+  discard sigaction(SIGINT, sa, nil)
+
+## Restores default ``SIGINT`` handling (``SIG_DFL``).
+proc coreInterruptHandlerRestore() =
+  var sa: Sigaction
+  sa.sa_handler = SIG_DFL
+  discard sigemptyset(sa.sa_mask)
+  sa.sa_flags = 0
+  discard sigaction(SIGINT, sa, nil)
+
+## Prompts on stdout and reads one trimmed line from stdin. ``readLine`` can raise ``IOError`` on
+## Ctrl+C; only treat cancel-shaped errors as user exit (130).
+proc coreLinePrompt(msg: string): string =
+  stdout.write(msg & ": ")
+  try:
+    result = readLine(stdin).strip()
+  except IOError as e:
+    if isatty(stdin) and coreIoErrorIsPromptCancel(e):
+      quit(130)
+    raise
+
+## True if the user has pressed Ctrl+C since the handler was installed.
+proc corePendingInterrupt*(): bool =
+  coreInterruptRequested != 0
+
+## Parses ``commandLineParams`` and runs the generated ``coreDispatchStat`` dispatcher (cligen).
+proc coreProgramMain() =
+  ## Maps argv to ``stat``: default subcommand is ``stat`` (omit the word ``stat`` when the first
+  ## token is not that subcommand). Empty argv runs ``stat`` with no paths.
+
+  ## Strips an explicit ``stat`` token so cligen receives only positional file paths and flags.
+  proc argvStatRoute(args: seq[string]): seq[string] =
+    if args.len == 0:
+      return @[]
+    if args[0] == "stat":
+      if args.len == 1:
+        return @[]
+      return args[1 .. ^1]
+    args
+
+  cligenQuit(coreDispatchStat(mergeParams(
+    @["nim-template", "stat"], argvStatRoute(commandLineParams()))))
+
+## True when stdin and stdout are both interactive TTYs.
+proc coreTtyIs(): bool =
+  isatty(stdin) and isatty(stdout)
+
+## Returns CLI paths as-is, or prompts interactively when stdin is a TTY and CI mode is off.
+proc coreInputsResolve(args: seq[string]; ci: bool): seq[string] =
+  if args.len > 0:
+    return args
+  if ci or not coreTtyIs():
+    return @[]
+  let answer = coreLinePrompt(
+    "Enter one or more file paths, separated by spaces or commas")
+  if answer.len == 0:
+    return @[]
+  for part in answer.split({' ', '\t', ','}):
+    let t = part.strip()
+    if t.len > 0:
+      result.add(t)
+
+## Collects size and mtime for one path; fills ``StatRow`` for reporting.
+proc statFileProcess(path: string): StatRow =
+  result.path = path
+  if not fileExists(path):
+    result.status = statStatusSkipped
+    result.message = "no such file"
+    return
+  if dirExists(path):
+    result.status = statStatusSkipped
+    result.message = "path is a directory, not a regular file"
+    return
+  try:
+    let info = getFileInfo(path, followSymlink = true)
+    result.status = statStatusOk
+    result.bytes = info.size
+    result.lastWrite = format(info.lastWriteTime, "yyyy-MM-dd HH:mm:sszzz")
+  except CatchableError as e:
+    result.status = statStatusFailed
+    result.message = e.msg
+
+## Prints one line for a stat row (ok / skip / fail).
+proc statStatusPrint(r: StatRow) =
+  case r.status
+  of statStatusOk:
+    let mib = coreBytesMbFrom(r.bytes)
+    stdout.writeLine(&"{r.path}  {r.bytes} bytes  ({mib:.2f} MiB)  mtime {r.lastWrite}")
+  of statStatusSkipped:
+    stdout.writeLine(&"skip {r.path}: {r.message}")
+  else:
+    stdout.writeLine(&"fail {r.path}: {r.message}")
+
+## Resolves inputs, stats each path, prints lines; exits non-zero if any path failed.
+proc statRun(files: seq[string]; opts: StatOptions) =
+  coreInterruptHandlerInstall()
+  defer:
+    coreInterruptHandlerRestore()
+  let resolved = coreInputsResolve(files, opts.ci)
+  if resolved.len == 0:
+    stderr.writeLine "provide one or more paths"
+    quit(1)
+  var anyFailed = false
+  for p in resolved:
+    if corePendingInterrupt():
+      stderr.writeLine ""
+      stderr.writeLine "Interrupted."
+      quit(130)
+    let r = statFileProcess(p)
+    statStatusPrint(r)
+    if r.status == statStatusFailed:
+      anyFailed = true
+  if anyFailed:
+    quit(1)
+
+## CLI entry for the ``stat`` subcommand; exported for cligen (name avoids ``posix.stat``).
+proc statFiles*(files: seq[string] = @[]; ci = false) =
+  statRun(files, StatOptions(ci: ci))
+
+dispatchGen(statFiles, "stat",
+  usage = statUsageTmpl,
+  mergeNames = @["nim-template", "stat"],
+  short = {"ci": '\0'},
+  help = {
+    "ci": "CI mode: if argv has no paths, exit instead of prompting on a TTY",
+    "files": "Paths to regular files (size and mtime printed for each)",
+  },
+  positional = "files",
+  implicitDefault = @["files"],
+  doc = """
+
+Minimal CLI template: print size and last-write time for each regular file.
+
+Usage:
+
+nim-template stat [options] [files...]
+
+""",
+  dispatchName = "coreDispatchStat",
+  cf = statClCfg,
+  noHdr = true,
+)
+
+when isMainModule:
+  coreProgramMain()
