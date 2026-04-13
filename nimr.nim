@@ -7,11 +7,9 @@
   Usage:
     nimr -h
     nimr run -h
-    nimr run script.nim [args...]
+    nimr run <script.nim> [args...]
     nimr cacheClear
-
-  ``nimr run -h`` applies only when no script path is given (otherwise ``-h`` is forwarded to the
-  compiled program).
+    nimr completion zsh
 
   Code Standards:
     - Commands that shell out to non-bundled binaries should check PATH, print install hints, and
@@ -49,59 +47,232 @@
       - materially different pipelines → separate helpers, not interleaved
       - repeated status literals and sentinels → centralized constants (or enums when suitable)
     - Assume unix arch and POSIX features are available
-    - Use cligen for CLI features (declare it in ``nimr.nimble`` / your package manager; no grab in
+    - Use argparse for CLI features (declare it in ``nimr.nimble`` / your package manager; no grab in
       this module)
       - default to no shortened flags for newly added options
     - Local dev build for this repo: ``just`` / ``justfile`` (needs ``nim`` + ``nimble`` on PATH)
     - Use line max-width of 100 characters, unless the line is a code block or a URL
 ]#
 
-import std/[os, osproc, strutils, tables]
-import cligen
-import cligen/humanUt
+import std/[os, osproc, streams, strutils]
+import argparse
 
 {.push warning[Deprecated]: off.}
 import std/sha1
 {.pop.}
 
-const
-  ## Cligen help: ``doc`` then options only (no ``$command`` / ``$args`` synopsis).
-  coreUsageTmpl = "${doc}\nOptions:\n$options"
+type
+  ## Zsh completion behavior after a top-level subcommand word (word 2).
+  CoreCliSurfaceZshTail = enum
+    coreCliSurfaceZshTailNone
+    coreCliSurfaceZshTailFiles
+    coreCliSurfaceZshTailNestedWords
+
+type
+  ## One flag or option for zsh ``_arguments`` generation.
+  CoreCliSurfaceOptionSpec = object
+    ## Short help shown in zsh completion (sanitized for ``_arguments``).
+    help: string
+    ## Option spellings (e.g. ``-q`` and ``--quality``); combined into one zsh spec when grouped.
+    names: seq[string]
+    ## When true, expect ``:placeholder:`` value completion after the flag.
+    takesValue: bool
+    ## Placeholder label after the colon (e.g. ``pixels``, ``preset``).
+    valuePlaceholder: string
+    ## When non-empty, zsh offers these literals as the flag value.
+    valueWords: seq[string]
+
+type
+  ## One top-level subcommand plus zsh tail behavior and an optional usage line suffix.
+  CoreCliSurfaceTopCmd = object
+    ## Subcommand name offered at ``CURRENT == 2``.
+    name: string
+    ## Words offered at ``CURRENT == 3`` when ``zshTail`` is ``coreCliSurfaceZshTailNestedWords``.
+    nestedWords: seq[string]
+    ## Flags and options valid after this subcommand (or for ``defaultSubcommand`` before it is spelled).
+    options: seq[CoreCliSurfaceOptionSpec]
+    ## Text after ``prog & " "`` for one usage line; empty to omit from usage output.
+    usageLine: string
+    ## How zsh completes further tokens under this subcommand.
+    zshTail: CoreCliSurfaceZshTail
+
+type
+  ## Declarative CLI surface for zsh completion text and indented usage lines.
+  CoreCliSurfaceSpec = object
+    ## When set, ``options`` on that subcommand may appear before its word (implicit subcommand).
+    defaultSubcommand: string
+    ## Program name for ``#compdef`` and usage lines.
+    prog: string
+    ## Top-level subcommands (TAB at word 2).
+    topCommands: seq[CoreCliSurfaceTopCmd]
+    ## Options valid before a subcommand word (e.g. global ``-h`` / ``--help``).
+    topOptions: seq[CoreCliSurfaceOptionSpec]
+    ## Usage line suffixes (after ``prog & " "``) printed before per-command lines.
+    usagePreamble: seq[string]
+    ## Zsh completion function name including leading underscore.
+    zshFunc: string
 
 
-var coreClCfg = clCfg
+## Indented usage lines from ``spec.usagePreamble`` and non-empty ``usageLine`` fields.
+proc coreCliSurfaceUsageIndented(spec: CoreCliSurfaceSpec): string =
+  var lines: seq[string]
+  for p in spec.usagePreamble:
+    lines.add("  " & spec.prog & " " & p)
+  for c in spec.topCommands:
+    if c.usageLine.len > 0:
+      lines.add("  " & spec.prog & " " & c.usageLine)
+  lines.join("\n")
 
-## Narrow cligen help table to keys, defaults, and descriptions only.
-coreClCfg.hTabCols = @[clOptKeys, clDflVal, clDescrip]
 
-## Keep top-level ``doc`` line breaks readable (avoid aggressive reflow).
-coreClCfg.wrapDoc = -1
-coreClCfg.wrapTable = -1
+## Sanitizes help text for zsh ``_arguments`` bracket descriptions.
+proc coreCliSurfaceZshBracketDesc(help: string): string =
+  const maxLen = 72
+  var n = 0
+  for c in help:
+    if n >= maxLen:
+      break
+    case c
+    of '[', ']', ':', ';', '\'', '"', '\\', '\n', '\r':
+      result.add(' ')
+    else:
+      result.add(c)
+    inc n
+  result = result.strip()
+  if result.len == 0:
+    result = "option"
 
-## Cligen help ANSI colors; honor ``NO_COLOR`` the same way cligen's config loader does.
-let coreCligenPlain =
-  existsEnv("NO_COLOR") and getEnv("NO_COLOR") notin ["0", "no", "off", "false"]
-let coreCligenAttrOff = if coreCligenPlain: "" else: textAttrOff
-coreClCfg.helpAttr["clOptKeys"] = textAttrOn(@["cyan", "bold"], coreCligenPlain)
-coreClCfg.helpAttrOff["clOptKeys"] = coreCligenAttrOff
-coreClCfg.helpAttr["clValType"] = textAttrOn(@["yellow"], coreCligenPlain)
-coreClCfg.helpAttrOff["clValType"] = coreCligenAttrOff
-coreClCfg.helpAttr["clDflVal"] = textAttrOn(@["green"], coreCligenPlain)
-coreClCfg.helpAttrOff["clDflVal"] = coreCligenAttrOff
-coreClCfg.helpAttr["cmd"] = textAttrOn(@["cyan", "bold"], coreCligenPlain)
-coreClCfg.helpAttrOff["cmd"] = coreCligenAttrOff
-coreClCfg.helpAttr["doc"] = textAttrOn(@["faint"], coreCligenPlain)
-coreClCfg.helpAttrOff["doc"] = coreCligenAttrOff
 
-## ``dispatchMulti`` top-level help uses global ``clCfg`` (``topLevelHelp``); mirror runner cfg.
-clCfg = coreClCfg
+## Comma-separated brace group for zsh (``{-h,--help}``).
+proc coreCliSurfaceZshOptBraceNames(names: seq[string]): string =
+  result = "{"
+  for i, n in names:
+    if i > 0:
+      result.add(',')
+    result.add(n)
+  result.add('}')
+
+
+## One ``_arguments`` spec line for a flag or value-taking option.
+proc coreCliSurfaceZshOptionArgumentLine(o: CoreCliSurfaceOptionSpec): string =
+  if o.names.len == 0:
+    return ""
+  let desc = coreCliSurfaceZshBracketDesc(o.help)
+  let excl = "(" & o.names.join(" ") & ")"
+  let brace = coreCliSurfaceZshOptBraceNames(o.names)
+  if not o.takesValue:
+    return "'" & excl & "'" & brace & "'[" & desc & "]'"
+  let phRaw = o.valuePlaceholder.strip()
+  let ph = if phRaw.len > 0: phRaw else: "value"
+  if o.valueWords.len > 0:
+    var inner = "(("
+    for i, w in o.valueWords:
+      if i > 0:
+        inner.add(' ')
+      inner.add(w)
+    inner.add("))")
+    return "'" & excl & "'" & brace & "'[" & desc & "]:" & ph & ":" & inner & "'"
+  "'" & excl & "'" & brace & "'[" & desc & "]:" & ph & ":'"
+
+
+## ``_arguments`` block for file-taking subcommands (flags then files).
+proc coreCliSurfaceZshCompressArgumentsWithIndent(opts: seq[CoreCliSurfaceOptionSpec]; sp: string): string =
+  if opts.len == 0:
+    return sp & "_files && return 0\n"
+  result = sp & "_arguments -s -S \\\n"
+  for o in opts:
+    let line = coreCliSurfaceZshOptionArgumentLine(o)
+    if line.len > 0:
+      result.add(sp & "  ")
+      result.add(line)
+      result.add(" \\\n")
+  result.add(sp & "  '*:file:_files' && return 0\n")
+
+
+## Dedupes strings while preserving first-seen order.
+proc coreCliSurfaceSeqDedupePreserve(xs: seq[string]): seq[string] =
+  for x in xs:
+    var seen = false
+    for y in result:
+      if y == x:
+        seen = true
+        break
+    if not seen:
+      result.add(x)
+
+
+## Words offered at ``CURRENT == 2`` (subcommands plus global and implicit-subcommand flags).
+proc coreCliSurfaceZshWordTwoCompaddWords(spec: CoreCliSurfaceSpec): seq[string] =
+  for o in spec.topOptions:
+    for n in o.names:
+      result.add(n)
+  if spec.defaultSubcommand.len > 0:
+    for c in spec.topCommands:
+      if c.name == spec.defaultSubcommand:
+        for o in c.options:
+          for n in o.names:
+            result.add(n)
+        break
+  for c in spec.topCommands:
+    result.add(c.name)
+
+
+## Options for the implicit default subcommand, or empty.
+proc coreCliSurfaceOptionsForDefault(spec: CoreCliSurfaceSpec): seq[CoreCliSurfaceOptionSpec] =
+  if spec.defaultSubcommand.len == 0:
+    return @[]
+  for c in spec.topCommands:
+    if c.name == spec.defaultSubcommand:
+      return c.options
+  @[]
+
+
+## Builds the zsh completion script body (``#compdef``, ``_arguments``, ``case`` arms, ``_files``).
+proc coreCliSurfaceZshScript(spec: CoreCliSurfaceSpec): string =
+  let w2 = coreCliSurfaceSeqDedupePreserve(coreCliSurfaceZshWordTwoCompaddWords(spec))
+  let w2line = w2.join(" ")
+  let dopts = coreCliSurfaceOptionsForDefault(spec)
+  var arms = ""
+  for c in spec.topCommands:
+    arms.add("    ")
+    arms.add(c.name)
+    arms.add(")\n")
+    case c.zshTail
+    of coreCliSurfaceZshTailNone:
+      arms.add("      return 0\n      ;;\n")
+    of coreCliSurfaceZshTailFiles:
+      arms.add("      compset -n 2\n")
+      arms.add(coreCliSurfaceZshCompressArgumentsWithIndent(c.options, "      "))
+      arms.add("      ;;\n")
+    of coreCliSurfaceZshTailNestedWords:
+      arms.add("      if (( CURRENT == 3 )); then\n")
+      arms.add("        compadd ")
+      arms.add(c.nestedWords.join(" "))
+      arms.add(" && return 0\n      fi\n      return 0\n      ;;\n")
+  var tail = "    esac\n"
+  if spec.defaultSubcommand.len > 0:
+    tail = "    *)\n"
+    tail.add("      compset -n 1\n")
+    tail.add(coreCliSurfaceZshCompressArgumentsWithIndent(dopts, "      "))
+    tail.add("      ;;\n    esac\n")
+  result = "#compdef " & spec.prog & "\n\n" & spec.zshFunc & "() {\n"
+  result.add("  if (( CURRENT == 2 )); then\n")
+  result.add("    compadd -- ")
+  result.add(w2line)
+  result.add("\n    return\n  fi\n")
+  result.add("  if (( CURRENT > 2 )); then\n")
+  result.add("    case ${words[2]} in\n")
+  result.add(arms)
+  result.add(tail)
+  result.add("  fi\n  _files\n}\n\n")
+  result.add(spec.zshFunc)
+  result.add(" \"$@\"\n")
 
 
 ## Returns the nimr cache directory under ``$HOME/.cache/nimr``.
 proc cacheDirNimrGet(): string =
   let home = getEnv("HOME")
   if home.len == 0:
-    stderr.writeLine "nimr: HOME is not set"
+    stderr.writeLine "[nimr] HOME is not set"
     quit(1)
   home / ".cache" / "nimr"
 
@@ -124,9 +295,86 @@ proc cacheClearRun() =
   try:
     removeDir(dir, checkDir = false)
   except CatchableError as e:
-    stderr.writeLine "nimr: could not clear cache: ", e.msg
+    stderr.writeLine "[nimr] could not clear cache: ", e.msg
     quit(1)
-  stderr.writeLine "nimr: cleared ", dir
+  stderr.writeLine "[nimr] cleared ", dir
+
+
+## Writes ``body`` to stdout with a blank line before and after (for ``-h`` / help output).
+## Optional ``docAttrsPrefix`` / ``docAttrsSuffix`` wrap ``body`` (e.g. faint ANSI for no-arg help).
+proc coreCliHelpStdoutWrite(body: string; docAttrsPrefix = ""; docAttrsSuffix = "") =
+  stdout.write '\n'
+  stdout.write docAttrsPrefix
+  stdout.write body
+  stdout.write docAttrsSuffix
+  if not body.endsWith('\n'):
+    stdout.write '\n'
+  stdout.write '\n'
+
+
+## True when ANSI colors should be suppressed (same rule as former cligen config loading).
+proc coreCliPlainGet(): bool =
+  existsEnv("NO_COLOR") and getEnv("NO_COLOR") notin ["0", "no", "off", "false"]
+
+
+## If ``absPath`` starts with ``home`` as a directory prefix, returns tilde form (``~`` + suffix).
+proc corePathDisplayTilde(home, absPath: string): string =
+  if home.len == 0 or absPath.len < home.len:
+    return absPath
+  if not absPath.startsWith(home):
+    return absPath
+  if absPath.len > home.len and absPath[home.len] != DirSep:
+    return absPath
+  if absPath.len == home.len:
+    return "~"
+  "~" & absPath[home.len .. ^1]
+
+
+## Builds an SGR ``on`` sequence from space-separated attribute words, or empty when ``plain``.
+proc coreTextAttrOn(words: openArray[string]; plain: bool): string =
+  if plain:
+    return ""
+  const esc = "\x1b["
+  var parts: seq[string]
+  for w in words:
+    case w
+    of "bold": parts.add "1"
+    of "faint": parts.add "2"
+    of "cyan": parts.add "36"
+    of "green": parts.add "32"
+    of "yellow": parts.add "33"
+    else: discard
+  if parts.len == 0:
+    return ""
+  esc & parts.join(";") & "m"
+
+
+## Resets SGR when not ``plain``.
+proc coreTextAttrOff(plain: bool): string =
+  if plain:
+    ""
+  else:
+    "\x1b[m"
+
+
+## Writes ``contents`` to ``HOME/.zsh/completions/zshFileName``. Warns when the directory is created;
+## prints an ``fpath``/``compinit`` hint only in that case.
+proc coreZshCompletionFileWrite(appBin, zshFileName, contents: string) =
+  let home = getEnv("HOME")
+  if home.len == 0:
+    stderr.writeLine appBin, ": HOME is not set"
+    quit(1)
+  let dir = home / ".zsh" / "completions"
+  let dirExisted = dir.dirExists
+  if not dirExisted:
+    stderr.writeLine appBin, ": warning: ", corePathDisplayTilde(home, dir), " did not exist; creating it"
+    createDir(dir)
+  let path = dir / zshFileName
+  writeFile(path, contents)
+  stdout.writeLine appBin, ": wrote ", corePathDisplayTilde(home, path)
+  if not dirExisted:
+    stdout.writeLine appBin, ": add ", corePathDisplayTilde(home, dir),
+      " to fpath before compinit, then restart zsh or run: compinit"
 
 
 ## True when ``stem`` is a valid Nim identifier stem.
@@ -195,15 +443,15 @@ proc runCompileInvoke(nimSource: string; scriptPathForPixiWalk: string; binaryPa
   if manifest.len > 0:
     let pixiExe = findExe("pixi")
     if pixiExe.len == 0:
-      stderr.writeLine "nimr: pixi.toml found (", manifest, ") but pixi is not on PATH"
-      stderr.writeLine "nimr: install pixi: https://pixi.sh"
+      stderr.writeLine "[nimr] pixi.toml found (", manifest, ") but pixi is not on PATH"
+      stderr.writeLine "[nimr] install pixi: https://pixi.sh"
       quit(1)
     let args = @["run", "--manifest-path", manifest, "nim"] & compileTail
     return coreProcessExitCodeWait(pixiExe, args, workDir)
   let nimExe = findExe("nim")
   if nimExe.len == 0:
-    stderr.writeLine "nimr: nim is not on PATH"
-    stderr.writeLine "nimr: install Nim, or add pixi.toml + nim via pixi (https://pixi.sh)"
+    stderr.writeLine "[nimr] nim is not on PATH"
+    stderr.writeLine "[nimr] install Nim, or add pixi.toml + nim via pixi (https://pixi.sh)"
     quit(1)
   coreProcessExitCodeWait(nimExe, compileTail, workDir)
 
@@ -246,7 +494,7 @@ proc runBinaryExec(binary: string; args: openArray[string]) =
 
 ## Prints help for the ``run`` subcommand (stdout).
 proc coreRunHelpPrint() =
-  stdout.writeLine """
+  coreCliHelpStdoutWrite """
 Compile (if needed) and execute a Nim source file. Extra tokens are forwarded to the compiled
 program unchanged.
 
@@ -257,17 +505,12 @@ nimr run <script.nim> [args...]
 """.strip()
 
 
-## Exported cligen entry for ``cacheClear``.
-proc cacheClear*() =
-  cacheClearRun()
-
-
 ## Compiles the first path when the content-hash cache misses, then runs the cached binary.
 ## Remaining tokens are forwarded to the compiled program unchanged.
 proc runExecute(scriptAndArgs: seq[string]) =
 
   if scriptAndArgs.len == 0:
-    stderr.writeLine "nimr: run: expected <script> [args...]"
+    stderr.writeLine "[nimr] run: expected <script> [args...]"
     quit(1)
 
   let script = scriptAndArgs[0]
@@ -279,7 +522,7 @@ proc runExecute(scriptAndArgs: seq[string]) =
 
   let scriptPath = expandFilename(absolutePath(script))
   if not fileExists(scriptPath):
-    stderr.writeLine "nimr: not a file: ", scriptPath
+    stderr.writeLine "[nimr] not a file: ", scriptPath
     quit(1)
 
   let raw = readFile(scriptPath)
@@ -311,11 +554,65 @@ proc runExecute(scriptAndArgs: seq[string]) =
   runBinaryExec(binaryPath, args)
 
 
-## Exported cligen entry for ``run`` (listed in top-level help and ``nimr help``; normal
-## ``nimr run ...`` execution uses the early handler above so flags after the script stay
-## forwarded to the compiled program).
-proc run*(scriptAndArgs: seq[string] = @[]) =
-  runExecute(scriptAndArgs)
+const
+  nimrTopHelpOpts = @[
+    CoreCliSurfaceOptionSpec(
+      help: "Show help",
+      names: @["-h", "--help"],
+      takesValue: false,
+      valuePlaceholder: "",
+      valueWords: @[]),
+  ]
+  ## Declarative CLI surface for zsh completion and usage lines.
+  nimrCoreCliSurface = CoreCliSurfaceSpec(
+    defaultSubcommand: "",
+    prog: "nimr",
+    topCommands: @[
+      CoreCliSurfaceTopCmd(
+        name: "run",
+        nestedWords: @[],
+        options: @[],
+        usageLine: "run <script.nim> [args...]",
+        zshTail: coreCliSurfaceZshTailFiles),
+      CoreCliSurfaceTopCmd(
+        name: "cacheClear",
+        nestedWords: @[],
+        options: @[],
+        usageLine: "cacheClear",
+        zshTail: coreCliSurfaceZshTailNone),
+      CoreCliSurfaceTopCmd(
+        name: "completion",
+        nestedWords: @["zsh"],
+        options: @[],
+        usageLine: "completion zsh",
+        zshTail: coreCliSurfaceZshTailNestedWords),
+    ],
+    topOptions: nimrTopHelpOpts,
+    usagePreamble: @["-h", "run -h"],
+    zshFunc: "_nimr",
+  )
+  ## Zsh completion script for ``nimr`` (from ``nimrCoreCliSurface``).
+  nimrZshCompletionScript = coreCliSurfaceZshScript(nimrCoreCliSurface)
+
+
+var nimrCliParser = newParser("nimr"):
+  help """
+Single-file Nim runner: content-hash cache, optional temp module when the path is not a valid Nim module filename, then nim c and execute.
+
+src: https://github.com/bdombro/nimr
+
+Typical invocations:
+""" & coreCliSurfaceUsageIndented(nimrCoreCliSurface) & "\n"
+  command "cacheClear":
+    help "Remove the nimr content-hash cache directory (under ~/.cache/nimr; uses HOME)."
+    run:
+      cacheClearRun()
+  command "completion":
+    help "Write shell completion scripts."
+    command "zsh":
+      help "Write zsh completion to ~/.zsh/completions/_nimr."
+      run:
+        coreZshCompletionFileWrite("nimr", "_nimr", nimrZshCompletionScript)
 
 
 when isMainModule:
@@ -325,56 +622,22 @@ when isMainModule:
       coreRunHelpPrint()
       quit(0)
     runExecute(ps[1 .. ^1])
-
-  dispatchMulti(
-    [
-      "multi",
-      cf = coreClCfg,
-      doc = """
-
-Single-file Nim runner: content-hash cache, optional temp module when the path is not a valid Nim module filename, then nim c and execute.
-
-src: https://github.com/bdombro/nimr
-
-Usage:
-
-nimr -h
-nimr run -h
-nimr run <script.nim> [args...]
-nimr cacheClear
-
-""",
-      noHdr = true,
-      usage = "${doc}\nSubcommands:\n$subcmds${ifVersion}\n",
-    ],
-    [
-      run,
-      doc = """Compile (if needed) and execute a Nim source file.
-
-Usage:
-
-nimr run <script.nim> [args...]
-
-""",
-      help = { "scriptAndArgs": "CLIGEN-NOHELP" },
-      mergeNames = @["nimr", "run"],
-      noHdr = true,
-      short = { "": ' ' },
-      usage = coreUsageTmpl,
-    ],
-    [
-      cacheClear,
-      doc = """Remove the nimr content-hash cache directory (under ~/.cache/nimr).
-
-The directory removed is ``$HOME/.cache/nimr`` when ``HOME`` is set.
-
-Usage:
-
-nimr cacheClear
-
-""",
-      mergeNames = @["nimr", "cacheClear"],
-      noHdr = true,
-      usage = coreUsageTmpl,
-    ],
-  )
+  if ps.len == 0:
+    let plain = coreCliPlainGet()
+    let onDoc = coreTextAttrOn(@["faint"], plain)
+    let off = coreTextAttrOff(plain)
+    coreCliHelpStdoutWrite(nimrCliParser.help(), onDoc, off)
+    quit(0)
+  try:
+    var helpSink = newStringStream()
+    nimrCliParser.run(ps, quitOnHelp = false, output = helpSink)
+    let captured = helpSink.data
+    if captured.len > 0:
+      coreCliHelpStdoutWrite(captured)
+    quit(0)
+  except ShortCircuit as e:
+    stderr.writeLine e.msg
+    quit(1)
+  except UsageError as e:
+    stderr.writeLine e.msg
+    quit(1)

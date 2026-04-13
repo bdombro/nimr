@@ -8,7 +8,7 @@ build:
 build-cross version="dev":
     ./scripts/build-cross.sh "{{version}}"
 
-# Installs the nimr binary to ~/.local/bin and appends cligen-style zsh completion to ~/.zshrc when possible.
+# Installs the nimr binary to ~/.local/bin and runs `nimr completion zsh` (writes ~/.zsh/completions/_nimr).
 install:
     ./scripts/install.sh
 

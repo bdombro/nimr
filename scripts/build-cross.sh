@@ -11,7 +11,7 @@
 # version defaults to "dev" and is used in zip names (e.g. nimr-dev-aarch64-apple-darwin.zip).
 #
 # Dependencies:
-#   - nim (2.0+), nimble (nimr.nimble deps, e.g. cligen)
+#   - nim (2.0+), nimble (nimr.nimble deps, e.g. argparse)
 #   - zig (Linux cross-compiles)
 #   - zip
 
