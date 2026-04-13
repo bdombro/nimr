@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Build nimr, install the binary to ~/.local/bin, and optionally write zsh completion to
-# ~/.zsh/completions/_nimr via `nimr completion zsh`.
+# ~/.zsh/completions/_nimr via `nimr completions-zsh`.
 # Run from anywhere; paths are resolved from this script.
 #
 # Usage:
@@ -39,7 +39,7 @@ main() {
   echo "install.sh: installed ${local_bin}/nimr"
 
   if [[ -x "${local_bin}/nimr" ]]; then
-    "${local_bin}/nimr" completion zsh || true
+    "${local_bin}/nimr" completions-zsh || true
   fi
 }
 

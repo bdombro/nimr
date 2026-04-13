@@ -8,7 +8,13 @@ build:
 build-cross version="dev":
     ./scripts/build-cross.sh "{{version}}"
 
-# Installs the nimr binary to ~/.local/bin and runs `nimr completion zsh` (writes ~/.zsh/completions/_nimr).
+# Installs dependencies (nim, nimscript, nimble) and runs `nimble install -d` to install dev dependencies.
+deps:
+    nimble install -y --depsOnly
+    nimble setup
+
+
+# Installs the nimr binary to ~/.local/bin and runs `nimr completions-zsh` (writes ~/.zsh/completions/_nimr).
 install:
     ./scripts/install.sh
 

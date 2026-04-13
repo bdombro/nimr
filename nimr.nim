@@ -9,7 +9,7 @@
     nimr run -h
     nimr run <script.nim> [args...]
     nimr cacheClear
-    nimr completion zsh
+    nimr completions-zsh
 
   Code Standards:
     - Commands that shell out to non-bundled binaries should check PATH, print install hints, and
@@ -47,15 +47,17 @@
       - materially different pipelines → separate helpers, not interleaved
       - repeated status literals and sentinels → centralized constants (or enums when suitable)
     - Assume unix arch and POSIX features are available
-    - Use argparse for CLI features (declare it in ``nimr.nimble`` / your package manager; no grab in
+    - Use argsbarg for CLI features (declare it in ``nimr.nimble`` / your package manager; no grab in
       this module)
       - default to no shortened flags for newly added options
     - Local dev build for this repo: ``just`` / ``justfile`` (needs ``nim`` + ``nimble`` on PATH)
     - Use line max-width of 100 characters, unless the line is a code block or a URL
+    - ``CliCommand.handler`` must be a named proc, not an inline proc literal, and must implement
+      the command directly rather than just forwarding to another proc
 ]#
 
-import std/[os, osproc, streams, strutils]
-import argparse
+import std/[options, os, osproc, strutils]
+import argsbarg
 
 {.push warning[Deprecated]: off.}
 import std/sha1
@@ -300,6 +302,20 @@ proc cacheClearRun() =
   stderr.writeLine "[nimr] cleared ", dir
 
 
+## Removes the nimr content-hash cache directory.
+proc nimrCacheClearHandle(ctx: CliContext) =
+  discard ctx
+  let dir = cacheDirNimrGet()
+  if not dirExists(dir):
+    return
+  try:
+    removeDir(dir, checkDir = false)
+  except CatchableError as e:
+    stderr.writeLine "[nimr] could not clear cache: ", e.msg
+    quit(1)
+  stderr.writeLine "[nimr] cleared ", dir
+
+
 ## Writes ``body`` to stdout with a blank line before and after (for ``-h`` / help output).
 ## Optional ``docAttrsPrefix`` / ``docAttrsSuffix`` wrap ``body`` (e.g. faint ANSI for no-arg help).
 proc coreCliHelpStdoutWrite(body: string; docAttrsPrefix = ""; docAttrsSuffix = "") =
@@ -492,6 +508,55 @@ proc runBinaryExec(binary: string; args: openArray[string]) =
   quit(code)
 
 
+## Compiles and runs a Nim script.
+proc nimrRunHandle(ctx: CliContext) =
+  let scriptAndArgs = ctx.args
+
+  if scriptAndArgs.len == 0:
+    stderr.writeLine "[nimr] run: expected <script> [args...]"
+    quit(1)
+
+  let script = scriptAndArgs[0]
+  let args =
+    if scriptAndArgs.len > 1:
+      scriptAndArgs[1 .. ^1]
+    else:
+      @[]
+
+  let scriptPath = expandFilename(absolutePath(script))
+  if not fileExists(scriptPath):
+    stderr.writeLine "[nimr] not a file: ", scriptPath
+    quit(1)
+
+  let raw = readFile(scriptPath)
+  let normalized = coreNormalizeForHash(raw)
+  let hashHex = $secureHash(normalized)
+  let binaryPath = cacheBinaryPathGet(hashHex)
+
+  if fileExists(binaryPath):
+    runBinaryExec(binaryPath, args)
+
+  var nimSource = scriptPath
+  var tmpRoot = ""
+  if not coreNimModuleFilenameIsCompatible(scriptPath):
+    tmpRoot = getTempDir() / ("nimr-build-" & hashHex[0 ..< 16])
+    createDir(tmpRoot)
+    let stem = runNimStemSanitize(runNimStemForNaming(scriptPath))
+    nimSource = tmpRoot / (stem & ".nim")
+    writeFile(nimSource, raw)
+
+  let code = runCompileInvoke(nimSource, scriptPath, binaryPath)
+  if tmpRoot.len > 0:
+    try:
+      removeDir(tmpRoot)
+    except CatchableError:
+      discard
+  if code != 0:
+    quit(code)
+
+  runBinaryExec(binaryPath, args)
+
+
 ## Prints help for the ``run`` subcommand (stdout).
 proc coreRunHelpPrint() =
   coreCliHelpStdoutWrite """
@@ -584,7 +649,7 @@ const
         name: "completion",
         nestedWords: @["zsh"],
         options: @[],
-        usageLine: "completion zsh",
+        usageLine: "completions-zsh",
         zshTail: coreCliSurfaceZshTailNestedWords),
     ],
     topOptions: nimrTopHelpOpts,
@@ -595,24 +660,38 @@ const
   nimrZshCompletionScript = coreCliSurfaceZshScript(nimrCoreCliSurface)
 
 
-var nimrCliParser = newParser("nimr"):
-  help """
-Single-file Nim runner: content-hash cache, optional temp module when the path is not a valid Nim module filename, then nim c and execute.
-
-src: https://github.com/bdombro/nimr
-
-Typical invocations:
-""" & coreCliSurfaceUsageIndented(nimrCoreCliSurface) & "\n"
-  command "cacheClear":
-    help "Remove the nimr content-hash cache directory (under ~/.cache/nimr; uses HOME)."
-    run:
-      cacheClearRun()
-  command "completion":
-    help "Write shell completion scripts."
-    command "zsh":
-      help "Write zsh completion to ~/.zsh/completions/_nimr."
-      run:
-        coreZshCompletionFileWrite("nimr", "_nimr", nimrZshCompletionScript)
+let nimrCliSchema = CliSchema(
+  commands: @[
+    CliCommand(
+      arguments: @[],
+      commands: @[],
+      description: "Remove the nimr content-hash cache directory.",
+      handler: some(nimrCacheClearHandle),
+      name: "cacheClear",
+      options: @[],
+    ),
+    CliCommand(
+      arguments: @[
+        CliOption(
+          description: "The Nim file to compile and run, followed by forwarded args.",
+          isPositional: true,
+          isRepeated: true,
+          kind: cliValueString,
+          name: "scriptAndArgs",
+        ),
+      ],
+      commands: @[],
+      description: "Compile and run a Nim script.",
+      handler: some(nimrRunHandle),
+      name: "run",
+      options: @[],
+    ),
+  ],
+  defaultCommand: none(string),
+  description: "Single-file Nim runner: content-hash cache, optional temp module when the path is not a valid Nim module filename, then nim c and execute.",
+  name: "nimr",
+  options: @[],
+)
 
 
 when isMainModule:
@@ -621,23 +700,4 @@ when isMainModule:
     if ps.len == 2 and ps[1].len > 0 and ps[1][0] == '-' and ps[1] in ["-h", "--help", "--helpsyntax"]:
       coreRunHelpPrint()
       quit(0)
-    runExecute(ps[1 .. ^1])
-  if ps.len == 0:
-    let plain = coreCliPlainGet()
-    let onDoc = coreTextAttrOn(@["faint"], plain)
-    let off = coreTextAttrOff(plain)
-    coreCliHelpStdoutWrite(nimrCliParser.help(), onDoc, off)
-    quit(0)
-  try:
-    var helpSink = newStringStream()
-    nimrCliParser.run(ps, quitOnHelp = false, output = helpSink)
-    let captured = helpSink.data
-    if captured.len > 0:
-      coreCliHelpStdoutWrite(captured)
-    quit(0)
-  except ShortCircuit as e:
-    stderr.writeLine e.msg
-    quit(1)
-  except UsageError as e:
-    stderr.writeLine e.msg
-    quit(1)
+  cliRun(nimrCliSchema, ps)

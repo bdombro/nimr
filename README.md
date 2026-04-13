@@ -15,7 +15,7 @@ nimr -h
 nimr run -h
 nimr run script.nim [args...]
 nimr cacheClear
-nimr completion zsh
+nimr completions-zsh
 ```
 
 Use `nimr run -h` only when there is no script path (otherwise `-h` is passed through to your program).
@@ -43,7 +43,7 @@ just install
 # or: ./scripts/install.sh
 ```
 
-That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completion zsh`, which writes `~/.zsh/completions/_nimr` (creating `~/.zsh/completions/` if needed, or replacing `_nimr` if it already exists). The install script does **not** edit `~/.zshrc`; you must put that directory on zsh `fpath` **before** `compinit` (see below).
+That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completions-zsh`, which writes `~/.zsh/completions/_nimr` (creating `~/.zsh/completions/` if needed, or replacing `_nimr` if it already exists). The install script does **not** edit `~/.zshrc`; you must put that directory on zsh `fpath` **before** `compinit` (see below).
 
 
 ## Completions
@@ -53,7 +53,7 @@ That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completion zsh`,
 Generate or refresh the completion script:
 
 ```sh
-nimr completion zsh
+nimr completions-zsh
 ```
 
 This installs `~/.zsh/completions/_nimr`. If the directory did not exist, `nimr` prints a warning when it creates it.
@@ -67,7 +67,7 @@ autoload -Uz compinit && compinit
 
 If you use **Oh My Zsh**, add the `fpath` line before Oh My Zsh is sourced (or wherever your theme loads `compinit`).
 
-**Release binary only:** run `nimr completion zsh` after installing the binary, then configure `fpath` as above.
+**Release binary only:** run `nimr completions-zsh` after installing the binary, then configure `fpath` as above.
 
 **Refresh if TAB seems stale**
 

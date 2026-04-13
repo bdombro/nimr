@@ -9,7 +9,7 @@
     nim-template -h
     nim-template stat [--ci] [files...]
     nim-template [--ci] [files...]
-    nim-template completion zsh
+    nim-template completions-zsh
 
   Code Standards:
     - Commands that shell out to non-bundled binaries should check PATH, print install hints, and
@@ -48,16 +48,17 @@
       - repeated status literals and sentinels → centralized constants (or enums when suitable)
     - Assume unix arch and POSIX features are available
     - Use grab for external library imports
-    - Use argparse for CLI features
+    - Use argsbarg for CLI features
       - default to no shortened flags for newly added options
     - Use line max-width of 100 characters, unless the line is a code block or a URL
+    - ``CliCommand.handler`` must be a named proc, not an inline proc literal, and must implement
+      the command directly rather than just forwarding to another proc
 ]#
 
 
-import std/[os, posix, strformat, streams, strutils, terminal, times]
+import std/[options, os, posix, strformat, streams, strutils, terminal, times]
 import grab
-
-grab "argparse"
+grab "argsbarg"
 
 type
   ## Zsh completion behavior after a top-level subcommand word (word 2).
@@ -316,7 +317,7 @@ const
         name: "completion",
         nestedWords: @["zsh"],
         options: @[],
-        usageLine: "completion zsh",
+        usageLine: "completions-zsh",
         zshTail: coreCliSurfaceZshTailNestedWords),
     ],
     topOptions: nimTemplateTopHelpOpts,
@@ -349,14 +350,14 @@ proc coreCliHelpStdoutWrite(body: string; docAttrsPrefix = ""; docAttrsSuffix = 
   stdout.write '\n'
 
 
-## Routes argv before argparse: default subcommand is ``stat`` (omit ``stat`` when the first token is
+## Routes argv before argsbarg: default subcommand is ``stat`` (omit ``stat`` when the first token is
 ## not ``stat``/``completion``/``help``). Leading ``-h``/``--help`` is left for the parser; other
 ## leading flags are treated as ``stat`` options. ``help`` becomes ``-h`` for top-level help.
 proc coreCliMultiArgvRoute(args: seq[string]): seq[string] =
   if args.len == 0:
     return @["stat"]
   let a0 = args[0]
-  if a0 == "stat" or a0 == "completion":
+  if a0 == "stat" or a0 == "completion" or a0 == "completions-zsh":
     return args
   if a0 == "help":
     return @["-h"]
@@ -511,41 +512,45 @@ proc statRun(files: seq[string]; opts: StatOptions) =
     quit(1)
 
 
-var nimTemplateCliParser = newParser("nim-template"):
-  help """
-Minimal CLI template: print size and last-write time for each regular file.
+## Prints size and last-write time for each regular file.
+proc nimTemplateStatHandle(ctx: CliContext) =
+  statRun(ctx.args, StatOptions(ci: ctx.optFlag("ci")))
 
-You may omit ``stat`` when the first argument is not ``help`` or ``completion`` (flags and paths go
-to ``stat``).
 
-Typical invocations:
-""" & coreCliSurfaceUsageIndented(nimTemplateCoreCliSurface) & "\n"
-  command "stat":
-    help "Print size and last-write time for each regular file."
-    flag("--ci", help = "CI mode: if argv has no paths, exit instead of prompting on a TTY")
-    arg("files", nargs = -1, help = "Paths to regular files (size and mtime printed for each)")
-    run:
-      statRun(opts.files, StatOptions(ci: opts.ci))
-  command "completion":
-    help "Write shell completion scripts."
-    command "zsh":
-      help "Write zsh completion to ~/.zsh/completions/_nim-template."
-      run:
-        coreZshCompletionFileWrite("nim-template", "_nim-template", nimTemplateZshCompletionScript)
+let nimTemplateCliSchema = CliSchema(
+  commands: @[
+    CliCommand(
+      arguments: @[
+        CliOption(
+          description: "Paths to regular files (size and mtime printed for each).",
+          isPositional: true,
+          isRepeated: true,
+          kind: cliValueString,
+          name: "files",
+        ),
+      ],
+      commands: @[],
+      description: "Print size and last-write time for each regular file.",
+      handler: some(nimTemplateStatHandle),
+      name: "stat",
+      options: @[
+        CliOption(
+          description: "CI mode: if argv has no paths, exit instead of prompting on a TTY.",
+          isPositional: false,
+          isRepeated: false,
+          kind: cliValueNone,
+          name: "ci",
+        ),
+      ],
+    ),
+  ],
+  defaultCommand: none(string),
+  description: "Minimal CLI template: print size and last-write time for each regular file.",
+  name: "nim-template",
+  options: @[],
+)
 
 
 when isMainModule:
   let routed = coreCliMultiArgvRoute(commandLineParams())
-  try:
-    var helpSink = newStringStream()
-    nimTemplateCliParser.run(routed, quitOnHelp = false, output = helpSink)
-    let captured = helpSink.data
-    if captured.len > 0:
-      coreCliHelpStdoutWrite(captured)
-    quit(0)
-  except ShortCircuit as e:
-    stderr.writeLine e.msg
-    quit(1)
-  except UsageError as e:
-    stderr.writeLine e.msg
-    quit(1)
+  cliRun(nimTemplateCliSchema, routed)
