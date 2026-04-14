@@ -1,14 +1,54 @@
 # nimr: Single-file Nim runner
 
-Run Nim files with a script-like workflow, fast reruns, and less setup friction. `nimr` reuses cached builds so unchanged programs start quickly, smooths over awkward filenames, and respects project-local Nim environments via `pixi.toml` when present.
+Run Nim files with a script-like workflow, fast reruns, and less setup friction. `nimr` reuses cached builds so unchanged programs start quickly, smooths over awkward filenames, and **auto-downloads dependencies** with the help of [grab](https://nimpkgs.org/?query=grab#/pkg/grab).
+
 
 Written in nim for max performance (1-5ms penalty).
 
 ## Usage
 
-chmod +x, add a shebang and run the file (needs `nimr` on `PATH`) like [nimr-template](./examples/nimr-template)
+Just chmod +x, add a shebang (`#!/usr/bin/env nimr`), and run the file (needs `nimr` on `PATH`) like [nimr-template](./examples/nimr-template)
 
-CLI overview:
+Your script, `foo`:
+```python
+#!/usr/bin/env nimr
+
+import std/[options, ...]
+import grab
+grab "argsbarg"
+
+# ...rest of your code, `argsbarg` is auto-installed
+echo "bar"
+```
+
+```sh
+chmod +x foo
+./foo # --> prints "bar"
+```
+
+### IDE Integration
+
+Nim language support for VSCode/Cursor:
+
+1. Install the unofficial Nim extension bc the official one is not working with nim language server
+2. Download a release bin for nim language server and place in ~/.nimble/bin
+
+Auto-selecting nim language when scripts don't end with ".nim" in VSCode:
+
+1. Install the [Shebang Language Association extension](https://marketplace.visualstudio.com/items?itemName=davidhewitt.shebang-language-associator)
+2. Add the following to your VSCode JSON settings:
+
+```json
+  "shebang.associations": [
+    {
+      "pattern": "^#!/usr/bin/env nimr$",
+      "language": "nim"
+    }
+  ],
+```
+
+
+### CLI overview:
 
 ```text
 nimr -h
