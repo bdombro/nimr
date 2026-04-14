@@ -38,9 +38,7 @@ main() {
   chmod +x "${local_bin}/nimr"
   echo "install.sh: installed ${local_bin}/nimr"
 
-  if [[ -x "${local_bin}/nimr" ]]; then
-    "${local_bin}/nimr" completions-zsh || true
-  fi
+  "${local_bin}/nimr" completion zsh > ~/.zsh/completions/_nimr
 }
 
 main "$@"

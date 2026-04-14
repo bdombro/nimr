@@ -55,7 +55,7 @@ nimr -h
 nimr run -h
 nimr run script.nim [args...]
 nimr cacheClear
-nimr completions-zsh
+nimr completion zsh > ~/.zsh/completions/_nimr
 ```
 
 Use `nimr run -h` only when there is no script path (otherwise `-h` is passed through to your program).
