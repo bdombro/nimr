@@ -519,28 +519,19 @@ proc nimTemplateStatHandle(ctx: CliContext) =
 
 let nimTemplateCliSchema = CliSchema(
   commands: @[
-    CliCommand(
-      arguments: @[
-        CliOption(
-          description: "Paths to regular files (size and mtime printed for each).",
-          isPositional: true,
-          isRepeated: true,
-          kind: cliValueString,
-          name: "files",
+    cliLeaf(
+      "stat",
+      "Print size and last-write time for each regular file.",
+      nimTemplateStatHandle,
+      arguments = @[
+        cliOptPositional(
+          "files",
+          "Paths to regular files (size and mtime printed for each).",
+          isRepeated = true,
         ),
       ],
-      commands: @[],
-      description: "Print size and last-write time for each regular file.",
-      handler: some(nimTemplateStatHandle),
-      name: "stat",
-      options: @[
-        CliOption(
-          description: "CI mode: if argv has no paths, exit instead of prompting on a TTY.",
-          isPositional: false,
-          isRepeated: false,
-          kind: cliValueNone,
-          name: "ci",
-        ),
+      options = @[
+        cliOptFlag("ci", "CI mode: if argv has no paths, exit instead of prompting on a TTY."),
       ],
     ),
   ],

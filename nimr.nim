@@ -56,12 +56,15 @@
       the command directly rather than just forwarding to another proc
 ]#
 
-import std/[options, os, osproc, strutils]
+import std/[options, os, osproc, strutils, times]
 import argsbarg
 
 {.push warning[Deprecated]: off.}
 import std/sha1
 {.pop.}
+
+## Oldest last-use ``mtime`` still kept after a compile-triggered sweep of the hash cache directory.
+const cacheUnusedMaxAgeDays = 30
 
 type
   ## Zsh completion behavior after a top-level subcommand word (word 2).
@@ -279,6 +282,14 @@ proc cacheDirNimrGet(): string =
   home / ".cache" / "nimr"
 
 
+## Bumps ``path`` ``mtime`` to now so sweeps use last-run time, not compile time.
+proc cacheBinaryLastUseTouch(path: string) =
+  try:
+    setLastModificationTime(path, getTime())
+  except CatchableError:
+    discard
+
+
 ## Returns the absolute path to the cached executable for ``hashHex``.
 proc cacheBinaryPathGet(hashHex: string): string =
   let dir = cacheDirNimrGet()
@@ -287,6 +298,21 @@ proc cacheBinaryPathGet(hashHex: string): string =
     dir / hashHex & ".exe"
   else:
     dir / hashHex
+
+
+## Drops cached binaries under ``dir`` whose ``mtime`` is older than ``cacheUnusedMaxAgeDays``.
+proc cacheStaleBinaryRemove(dir: string) =
+  if not dirExists(dir):
+    return
+  let cutoff = getTime() - initTimeInterval(days = cacheUnusedMaxAgeDays)
+  for kind, path in walkDir(dir):
+    if kind != pcFile:
+      continue
+    try:
+      if getLastModificationTime(path) < cutoff:
+        removeFile(path)
+    except CatchableError:
+      discard
 
 
 ## Deletes the nimr cache directory when it exists.
@@ -534,6 +560,7 @@ proc nimrRunHandle(ctx: CliContext) =
   let binaryPath = cacheBinaryPathGet(hashHex)
 
   if fileExists(binaryPath):
+    cacheBinaryLastUseTouch(binaryPath)
     runBinaryExec(binaryPath, args)
 
   var nimSource = scriptPath
@@ -554,6 +581,7 @@ proc nimrRunHandle(ctx: CliContext) =
   if code != 0:
     quit(code)
 
+  cacheStaleBinaryRemove(cacheDirNimrGet())
   runBinaryExec(binaryPath, args)
 
 
@@ -596,6 +624,7 @@ proc runExecute(scriptAndArgs: seq[string]) =
   let binaryPath = cacheBinaryPathGet(hashHex)
 
   if fileExists(binaryPath):
+    cacheBinaryLastUseTouch(binaryPath)
     runBinaryExec(binaryPath, args)
 
   var nimSource = scriptPath
@@ -616,6 +645,7 @@ proc runExecute(scriptAndArgs: seq[string]) =
   if code != 0:
     quit(code)
 
+  cacheStaleBinaryRemove(cacheDirNimrGet())
   runBinaryExec(binaryPath, args)
 
 
@@ -662,29 +692,22 @@ const
 
 let nimrCliSchema = CliSchema(
   commands: @[
-    CliCommand(
-      arguments: @[],
-      commands: @[],
-      description: "Remove the nimr content-hash cache directory.",
-      handler: some(nimrCacheClearHandle),
-      name: "cacheClear",
-      options: @[],
+    cliLeaf(
+      "cacheClear",
+      "Remove the nimr content-hash cache directory.",
+      nimrCacheClearHandle,
     ),
-    CliCommand(
-      arguments: @[
-        CliOption(
-          description: "The Nim file to compile and run, followed by forwarded args.",
-          isPositional: true,
-          isRepeated: true,
-          kind: cliValueString,
-          name: "scriptAndArgs",
+    cliLeaf(
+      "run",
+      "Compile and run a Nim script.",
+      nimrRunHandle,
+      arguments = @[
+        cliOptPositional(
+          "scriptAndArgs",
+          "The Nim file to compile and run, followed by forwarded args.",
+          isRepeated = true,
         ),
       ],
-      commands: @[],
-      description: "Compile and run a Nim script.",
-      handler: some(nimrRunHandle),
-      name: "run",
-      options: @[],
     ),
   ],
   defaultCommand: none(string),
