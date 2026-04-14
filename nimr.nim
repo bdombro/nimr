@@ -28,7 +28,7 @@
       - procs: callee before caller when required by the compiler; otherwise alphabetical
       - prefixed with a short domain token for app features (``run`` / ``cache``); use ``core`` for
         shared CLI/runtime helpers
-    - functions must have a doc comment, and a blank empty line after the function
+    - functions must have a human-readable doc comment, and a blank empty line after the function
     - Function shape:
       - entry-point and orchestration procs read top-down as a short sequence of named steps
       - keep the happy path obvious; move mechanics into helpers with intent-revealing names
@@ -54,6 +54,9 @@
     - Use line max-width of 100 characters, unless the line is a code block or a URL
     - ``CliCommand.handler`` must be a named proc, not an inline proc literal, and must implement
       the command directly rather than just forwarding to another proc
+    - ``cliRun`` entrypoint: first argument must be an inline ``CliSchema(...)`` literal; second
+      must be an inline argv expression (e.g. ``commandLineParams()``). Do not use a ``let`` bound
+      only to pass schema or argv into ``cliRun`` alone (tests may use variables).
 ]#
 
 import std/[options, os, osproc, strutils, times]
@@ -690,37 +693,40 @@ const
   nimrZshCompletionScript = coreCliSurfaceZshScript(nimrCoreCliSurface)
 
 
-let nimrCliSchema = CliSchema(
-  commands: @[
-    cliLeaf(
-      "cacheClear",
-      "Remove the nimr content-hash cache directory.",
-      nimrCacheClearHandle,
-    ),
-    cliLeaf(
-      "run",
-      "Compile and run a Nim script.",
-      nimrRunHandle,
-      arguments = @[
-        cliOptPositional(
-          "scriptAndArgs",
-          "The Nim file to compile and run, followed by forwarded args.",
-          isRepeated = true,
-        ),
-      ],
-    ),
-  ],
-  defaultCommand: none(string),
-  description: "Single-file Nim runner: content-hash cache, optional temp module when the path is not a valid Nim module filename, then nim c and execute.",
-  name: "nimr",
-  options: @[],
-)
-
-
+## Main entry: ``cliFallbackWhenUnknown`` so ``nimr`` alone prints help and ``nimr script.nim``
+## runs ``run`` without spelling ``run`` (``cacheClear`` and flags still explicit).
 when isMainModule:
   let ps = commandLineParams()
   if ps.len >= 1 and ps[0] == "run":
     if ps.len == 2 and ps[1].len > 0 and ps[1][0] == '-' and ps[1] in ["-h", "--help", "--helpsyntax"]:
       coreRunHelpPrint()
       quit(0)
-  cliRun(nimrCliSchema, ps)
+  cliRun(
+    CliSchema(
+      commands: @[
+        cliLeaf(
+          "cacheClear",
+          "Remove the nimr content-hash cache directory.",
+          nimrCacheClearHandle,
+        ),
+        cliLeaf(
+          "run",
+          "Compile and run a Nim script.",
+          nimrRunHandle,
+          arguments = @[
+            cliOptPositional(
+              "scriptAndArgs",
+              "The Nim file to compile and run, followed by forwarded args.",
+              isRepeated = true,
+            ),
+          ],
+        ),
+      ],
+      description: "Single-file Nim runner: content-hash cache, optional temp module when the path is not a valid Nim module filename, then nim c and execute.",
+      fallbackCommand: some("run"),
+      fallbackMode: cliFallbackWhenMissingOrUnknown,
+      name: "nimr",
+      options: @[],
+    ),
+    commandLineParams(),
+  )

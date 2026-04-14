@@ -34,4 +34,4 @@ release VERSION:
     fi
 
 test:
-    ./dist/nimr run examples/nimr-template -h
+    PATH=./dist:$PATH ./examples/nimr-template

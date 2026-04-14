@@ -1,4 +1,4 @@
-#!/usr/bin/env -S nimr run
+#!/usr/bin/env nimr
 
 #[
   {app name}
@@ -28,7 +28,7 @@
       - procs: callee before caller when required by the compiler; otherwise alphabetical
       - prefixed with a short domain token for app features (here ``stat``); use ``core`` for
         shared CLI/runtime helpers
-    - functions must have a doc comment, and a blank empty line after the function
+    - functions must have a human-readable doc comment, and a blank empty line after the function
     - Function shape:
       - entry-point and orchestration procs read top-down as a short sequence of named steps
       - keep the happy path obvious; move mechanics into helpers with intent-revealing names
@@ -53,10 +53,13 @@
     - Use line max-width of 100 characters, unless the line is a code block or a URL
     - ``CliCommand.handler`` must be a named proc, not an inline proc literal, and must implement
       the command directly rather than just forwarding to another proc
+    - ``cliRun`` entrypoint: first argument must be an inline ``CliSchema(...)`` literal; second
+      must be an inline argv expression (e.g. ``commandLineParams()``). Do not use a ``let`` bound
+      only to pass schema or argv into ``cliRun`` alone (tests may use variables).
 ]#
 
 
-import std/[options, os, posix, strformat, streams, strutils, terminal, times]
+import std/[options, os, posix, strformat, strutils, terminal, times]
 import grab
 grab "argsbarg"
 
@@ -350,23 +353,6 @@ proc coreCliHelpStdoutWrite(body: string; docAttrsPrefix = ""; docAttrsSuffix = 
   stdout.write '\n'
 
 
-## Routes argv before argsbarg: default subcommand is ``stat`` (omit ``stat`` when the first token is
-## not ``stat``/``completion``/``help``). Leading ``-h``/``--help`` is left for the parser; other
-## leading flags are treated as ``stat`` options. ``help`` becomes ``-h`` for top-level help.
-proc coreCliMultiArgvRoute(args: seq[string]): seq[string] =
-  if args.len == 0:
-    return @["stat"]
-  let a0 = args[0]
-  if a0 == "stat" or a0 == "completion" or a0 == "completions-zsh":
-    return args
-  if a0 == "help":
-    return @["-h"]
-  if a0.len > 0 and a0[0] == '-':
-    if a0 in ["-h", "--help", "--helpsyntax"]:
-      return args
-    return @["stat"] & args
-  @["stat"] & args
-
 ## True when ``e`` looks like interrupt during ``readLine`` (``syncio`` errno 4 ``EINTR`` or macOS
 ## errno 5 ``EIO`` on stdin), not an unrelated I/O failure.
 proc coreIoErrorIsPromptCancel(e: ref IOError): bool =
@@ -517,31 +503,33 @@ proc nimTemplateStatHandle(ctx: CliContext) =
   statRun(ctx.args, StatOptions(ci: ctx.optFlag("ci")))
 
 
-let nimTemplateCliSchema = CliSchema(
-  commands: @[
-    cliLeaf(
-      "stat",
-      "Print size and last-write time for each regular file.",
-      nimTemplateStatHandle,
-      arguments = @[
-        cliOptPositional(
-          "files",
-          "Paths to regular files (size and mtime printed for each).",
-          isRepeated = true,
+## Template entry: ``cliFallbackWhenUnknown`` matches ``nim_file``—no args shows help, bare paths
+## hit ``stat``.
+when isMainModule:
+  cliRun(
+    CliSchema(
+      commands: @[
+        cliLeaf(
+          "stat",
+          "Print size and last-write time for each regular file.",
+          nimTemplateStatHandle,
+          arguments = @[
+            cliOptPositional(
+              "files",
+              "Paths to regular files (size and mtime printed for each).",
+              isRepeated = true,
+            ),
+          ],
+          options = @[
+            cliOptFlag("ci", "CI mode: if argv has no paths, exit instead of prompting on a TTY."),
+          ],
         ),
       ],
-      options = @[
-        cliOptFlag("ci", "CI mode: if argv has no paths, exit instead of prompting on a TTY."),
-      ],
+      description: "Minimal CLI template: print size and last-write time for each regular file.",
+      fallbackCommand: some("stat"),
+      fallbackMode: cliFallbackWhenUnknown,
+      name: "nim-template",
+      options: @[],
     ),
-  ],
-  defaultCommand: none(string),
-  description: "Minimal CLI template: print size and last-write time for each regular file.",
-  name: "nim-template",
-  options: @[],
-)
-
-
-when isMainModule:
-  let routed = coreCliMultiArgvRoute(commandLineParams())
-  cliRun(nimTemplateCliSchema, routed)
+    commandLineParams(),
+  )
