@@ -14,7 +14,7 @@ deps:
     nimble setup
 
 
-# Installs the nimr binary to ~/.local/bin and runs `nimr completions-zsh` (writes ~/.zsh/completions/_nimr).
+# Installs the nimr binary to ~/.local/bin and runs `nimr completion zsh` (writes ~/.zsh/completions/_nimr).
 install:
     ./scripts/install.sh
 

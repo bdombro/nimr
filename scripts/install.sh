@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Build nimr, install the binary to ~/.local/bin, and optionally write zsh completion to
-# ~/.zsh/completions/_nimr via `nimr completions-zsh`.
+# ~/.zsh/completions/_nimr via `nimr completion zsh`.
 # Run from anywhere; paths are resolved from this script.
 #
 # Usage:
@@ -34,12 +34,15 @@ main() {
     echo "install.sh: warning: ${local_bin} did not exist; creating it" >&2
     mkdir -p "${local_bin}"
   fi
+
   cp -f "${dist_bin}" "${local_bin}/nimr"
   chmod +x "${local_bin}/nimr"
   echo "install.sh: installed ${local_bin}/nimr"
 
+  set -x
   "${local_bin}/nimr" completion zsh > ~/.zsh/completions/_nimr
   "${local_bin}/nimr" cache-clear
+  set +x
 }
 
 main "$@"

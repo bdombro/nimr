@@ -2,8 +2,7 @@
 
 Run Nim files with a script-like workflow, fast reruns, and less setup friction. `nimr` reuses cached builds so unchanged programs start quickly, smooths over awkward filenames, and **auto-downloads dependencies** with the help of [grab](https://nimpkgs.org/?query=grab#/pkg/grab).
 
-
-Written in nim for max performance (1-5ms penalty).
+It's kinda like using a shebang `#!/usr/bin/env -S nim r`, but no virtual machine and auto-downloads external dependencies using `grab` lib.
 
 ## Usage
 
@@ -83,7 +82,7 @@ just install
 # or: ./scripts/install.sh
 ```
 
-That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completions-zsh`, which writes `~/.zsh/completions/_nimr` (creating `~/.zsh/completions/` if needed, or replacing `_nimr` if it already exists). The install script does **not** edit `~/.zshrc`; you must put that directory on zsh `fpath` **before** `compinit` (see below).
+That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completion zsh`, which writes `~/.zsh/completions/_nimr` (creating `~/.zsh/completions/` if needed, or replacing `_nimr` if it already exists). The install script does **not** edit `~/.zshrc`; you must put that directory on zsh `fpath` **before** `compinit` (see below).
 
 
 ## Completions
@@ -138,7 +137,7 @@ Cross-compiled release zips (macOS host + Linux glibc) live under `dist/`:
 just build-cross dev
 ```
 
-GitHub release (requires pre-built zips for that version in `dist/`):
+GitHub release (requires pre-built zips for that version in `dist/`). `release.sh` sets an annotated git tag for that version at the current `HEAD` (replacing the local tag if needed) before publishing.
 
 ```sh
 just release v1.2.3
