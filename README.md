@@ -1,135 +1,127 @@
-# nimr: Single-file Nim runner
+# nimr: single-file Nim runner
 
-Run Nim files with a script-like workflow, fast reruns, and less setup friction. `nimr` reuses cached builds so unchanged programs start quickly, smooths over awkward filenames, and **auto-installs Nimble dependencies**.
+**nimr** runs a Nim source file like a script: shebang, `chmod +x`, run. It can **skip recompiling** when nothing important changed, **install Nimble packages** for you, and **paper over** filenames that are not valid Nim module names.
 
-It's kinda like using a shebang `#!/usr/bin/env -S nim r`, but skips recompile on no change, no virtual machine, and auto-installs external dependencies.
+Similar idea to `#!/usr/bin/env -S nim r`, but nimr avoids a full compile when that metadata matches, does not use a VM for your app, lets you name it whatever you want, and can pull in **external Nimble dependencies** without a local `.nimble` project.
 
-Note: While nimr is convenient, it does add ~8ms startup delay compared to running a nim bin directly (see [Benchmark](#benchmark)).
+**Supported platforms:** macOS and Linux (POSIX). Windows is not supported.
 
-Also checkout my similar tools:
-- [gor](https://github.com/bdombro/nimr) for Golang
-- [mojor](https://github.com/bdombro/mojor) for Mojo
+### Startup cost
 
-## Usage
+Expect on the order of **~6 ms** extra startup versus running a pre-built binary directly (see [Benchmark](#benchmark)). Most of that is process startup and the CLI stack, not the cache lookup itself.
 
-Just chmod +x, add a shebang (`#!/usr/bin/env nimr`), and run the file (needs `nimr` on `PATH`) like [nimr-stat](./examples/nimr-stat) or [nimr-neo](./examples/nimr-neo) (Neo + extra compiler flags).
+### My similar tools
 
-Your script, `foo`:
-```python
+- [gor](https://github.com/bdombro/gor) — Go  
+- [mojor](https://github.com/bdombro/mojor) — Mojo  
+
+---
+
+## Quick start
+
+1. Put **`nimr` on your `PATH`** (see [Install](#install)).
+2. Start your script with `#!/usr/bin/env nimr`.
+3. `chmod +x` and run it.
+
+Examples in this repo: [nimr-stat](./examples/nimr-stat), [nimr-neo](./examples/nimr-neo) (Neo plus extra compiler flags).
+
+Minimal script `foo`:
+
+```nim
 #!/usr/bin/env nimr
 
 import std/[options, ...]
 import argsbarg
 
-# ...rest of your code, `argsbarg` is auto-installed
+# ... your code; argsbarg can be auto-installed via # nimr-requires:
 echo "bar"
 ```
 
 ```sh
 chmod +x foo
-./foo # --> prints "bar"
+./foo   # prints bar
 ```
 
+See [examples](./examples) for more.
+
+---
 
 ## Benchmark
 
-We have a hyperfine benchmark (`./scripts/bench.sh`) to measure the cost of usign nimr vs alternatives:
+[`./scripts/bench.sh`](./scripts/bench.sh) uses [hyperfine](https://github.com/sharkdp/hyperfine) to compare three ways to run the same tiny program:
 
-1. "compiled" - A fully compiled nim app ran directly
-2. "nimr" - An app that uses nimr that has been previously ran (aka warm). This means the app has already been compiled and cached, so nimr basically confirms the source has not changed and runs the compiled app, so the real difference vs compiled is doing the check and running the compiled app.
-3. "nim_r" - An app that uses `nim r` to compile and run
+| Label | What it measures |
+|--------|------------------|
+| **compiled** | `nim c` output run directly |
+| **nimr** | Warm run: cache hit after `stat`, no full source read, no recompile. Nimr then **`execv`s** into the cached binary (no long-lived parent waiting on a child). |
+| **nim r** | `#!/usr/bin/env -S nim r` ([`scripts/bench-assets/nim_r_hello.nim`](./scripts/bench-assets/nim_r_hello.nim)) |
 
-**Results**
+Rough minimum times (machine-dependent; see your own hyperfine output):
 
-The most important metric in the results is the min time taken per app:
+| | Time |
+|--|------|
+| compiled | ~3 ms |
+| nimr (warm) | ~9 ms |
+| nim r | ~120 ms |
 
-1. compiled ~ 0.7ms
-2. nimr ~ 9.2ms
-3. nimr_r ~ 126ms
+---
 
+## Dependencies: `# nimr-requires:`
 
-## Additional Features
+In the **first 40 lines** of your script (after the shebang), list Nimble packages as a **comma-separated** list. You can use several lines; they are merged in order.
 
-### Declaring dependencies (`# nimr-requires:`)
-
-Add a `# nimr-requires:` comment in the first 40 lines of your script (after the shebang).
-The value is a **comma-separated** list of Nimble package specs. Multiple directives are merged
-in order.
-
-```python
+```nim
 # nimr-requires: neo
 # nimr-requires: argsbarg@1.3.2,chronos
-# nimr-requires: argsbarg@#head <-- use latest
-
+# nimr-requires: arraymancer@#head   # latest from git head
 ```
 
-Note: nimr caches the deps until the app changes or nimr cache is cleared -- so #head/#branch may fall behind as long as the cache is valid.
+**When it runs:** directives are handled on first run and are cached until the file changes.
 
-On each run `nimr` checks whether each package is already installed (via `nimble path`). If not,
-it calls `nimble install -Y <spec>` and streams the progress. Then it passes `--path:…` to
-`nim c` so the packages are visible at compile time without needing a `.nimble` project file.
+**What nimr does:** for each package it runs `nimble path`; if missing, `nimble install -Y <spec>`. It then passes `--path:…` into `nim c` so imports resolve without a local Nimble project.
 
-The `# nimr-requires:` lines are part of the **content-hash cache key**, so changing a spec
-automatically triggers a fresh compile.
+---
 
-See [nimr-neo](./examples/nimr-neo) and [nimr-arraymancer](./examples/nimr-arraymancer) for
-full working examples.
+## Compiler flags: `# nimr-flags:`
 
-### Extra `nim c` flags (`# nimr-flags:`)
+Also in the **first 40 lines**, comma-separated tokens (trimmed; empties ignored) are passed to `nim c`:
 
-Add a `# nimr-flags:` comment in the first 40 lines to pass extra flags to `nim c`. The value
-is a **comma-separated** list of tokens (each segment is trimmed; empty segments are ignored).
-
-```python
+```nim
 # nimr-flags: --mm:refc,-d:release
 ```
 
-The `# nimr-flags:` lines are part of the **content-hash cache key**, so changing flags triggers
-a fresh compile.
 
-See [nimr-neo](./examples/nimr-neo) for a full script that combines `# nimr-requires:` with
-`# nimr-flags: --mm:refc` (Neo on Nim 2 often needs `--mm:refc`).
+Example: [nimr-neo](./examples/nimr-neo) (Neo on Nim 2 often needs `--mm:refc`).
 
-### IDE Integration
+---
 
-Nim language support for VSCode/Cursor:
+## Run cache (`~/.cache/nimr`)
 
-1. Install the unofficial Nim extension bc the official one is not working with nim language server
-2. Download a release bin for nim language server and place in ~/.nimble/bin
+- **Layout:** under `$HOME/.cache/nimr`, one **folder per script path** (flattened path segments joined by `__`). Inside that folder, cached executables are named like `s_<bytes>_t_<unix_seconds>` (whole-second mtime from `stat`).
+- **Cleanup:** after a successful compile, **older binaries in that same folder are removed**. There is **no** “delete if unused for N days” sweep. Wipe everything with **`nimr cache-clear`**.
+- **Run:** on a warm hit or after compile, nimr **`execv`s** into the cached binary—no parent `nimr` left waiting on a child.
+- **Concurrent misses:** if two processes compile the same cache entry at once, they **serialize** with **`flock`** on a **`.lock`** file next to that binary; the second waits for the first compile, then runs the same output.
 
-Auto-selecting nim language when scripts don't end with ".nim" in VSCode:
+---
 
-1. Install the [Shebang Language Association extension](https://marketplace.visualstudio.com/items?itemName=davidhewitt.shebang-language-associator)
-2. Add the following to your VSCode JSON settings:
+## Command line
 
-```json
-  "shebang.associations": [
-    {
-      "pattern": "^#!/usr/bin/env nimr$",
-      "language": "nim"
-    }
-  ],
-```
-
-
-### CLI overview:
+In addition to shebang, you can use cli.
 
 ```text
 nimr -h
+nimr script.nim [args...]
 nimr run -h
 nimr run script.nim [args...]
 nimr cache-clear
 nimr completion zsh > ~/.zsh/completions/_nimr
 ```
 
-Use `nimr run -h` only when there is no script path (otherwise `-h` is passed through to your program).
-
+---
 
 ## Install
 
-Use precompiled binaries from the [releases](https://github.com/bdombro/nimr/releases) page, or build from source (see **Building** below).
-
-To quickly install the latest **Apple Silicon** (aarch64) macOS build with `curl`:
+**Releases:** prebuilt binaries are on the [releases](https://github.com/bdombro/nimr/releases) page. You can copy them to your path (e.g. `~/.local/bin`).
 
 ```sh
 curl -sSL https://api.github.com/repos/bdombro/nimr/releases/latest | grep -Eo 'https://[^"]*aarch64-apple-darwin[^"]*\.zip' | head -1 | xargs curl -sSL -o nimr.zip
@@ -138,56 +130,28 @@ mv nimr ~/.local/bin/
 rm nimr.zip
 ```
 
-Assumes `~/.local/bin` is on your `PATH`.
-
-From a clone, build and install the binary to `~/.local/bin/nimr` and write a zsh completion file:
+**From a clone** (builds, copies to `~/.local/bin/nimr`, writes zsh completion, clears cache):
 
 ```sh
 just install
 # or: ./scripts/install.sh
 ```
 
-That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completion zsh`, which writes `~/.zsh/completions/_nimr` (creating `~/.zsh/completions/` if needed, or replacing `_nimr` if it already exists). The install script does **not** edit `~/.zshrc`; you must put that directory on zsh `fpath` **before** `compinit` (see below).
-
+---
 
 ## Completions
 
-### Zsh (file-based `_nimr`)
+### Zsh
 
-Generate or refresh the completion script:
+Generate the completion script (stdout—redirect to install):
 
 ```sh
-nimr completion zsh
+# If using zsh fpath feature
+nimr completion zsh > ~/.zsh/completions/_nimr
+# else
+echo 'eval "$(nimr completion zsh)"' >> ~/.zshrc
 ```
-
-This installs `~/.zsh/completions/_nimr`. If the directory did not exist, `nimr` prints a warning when it creates it.
-
-Put **`~/.zsh/completions` on `fpath` before `compinit`**. For example in `~/.zshrc`:
-
-```zsh
-fpath=(~/.zsh/completions $fpath)
-autoload -Uz compinit && compinit
-```
-
-If you use **Oh My Zsh**, add the `fpath` line before Oh My Zsh is sourced (or wherever your theme loads `compinit`).
-
-**Release binary only:** run `nimr completion zsh` after installing the binary, then configure `fpath` as above.
-
-**Refresh if TAB seems stale**
-
-```zsh
-rm -f ~/.zcompdump*
-autoload -Uz compinit && compinit
-```
-
-### Bash
-
-Often needs the `bash-completion` package for `_longopt`:
-
-```bash
-complete -F _longopt nimr
-```
-
+---
 
 ## Building
 
@@ -196,19 +160,31 @@ just build
 # or: ./scripts/build.sh
 ```
 
-Cross-compiled release zips (macOS host + Linux glibc) live under `dist/`:
+Cross-compiled zips (macOS host + Linux glibc) land in `dist/`:
 
 ```sh
-just build-cross dev
+just build-cross
+# or ./scripts/build-cross.sh
 ```
 
-GitHub release (requires pre-built zips for that version in `dist/`). `release.sh` sets an annotated git tag for that version at the current `HEAD` (replacing the local tag if needed) before publishing.
+---
 
-```sh
-just release v1.2.3
-# or: ./scripts/build-cross.sh v1.2.3 && ./scripts/release.sh v1.2.3
+## Editor tips (VS Code / Cursor)
+
+**Nim extension:** many people use a community Nim extension because the official one may not work well with `nimlangserver`. Install a Nim language server binary into `~/.nimble/bin` if the extension expects it.
+
+**Shebang files without `.nim`:** install [Shebang Language Associator](https://marketplace.visualstudio.com/items?itemName=davidhewitt.shebang-language-associator) and add:
+
+```json
+  "shebang.associations": [
+    {
+      "pattern": "^#!/usr/bin/env nimr$",
+      "language": "nim"
+    }
+  ]
 ```
 
+---
 
 ## License
 

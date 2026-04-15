@@ -1,6 +1,6 @@
 version = "0.1.0"
 author = "Brian Dombroski"
-description = "Single-file Nim runner with content-hash cache and safe temp filenames"
+description = "POSIX single-file Nim runner with metadata-keyed run cache and safe temp filenames"
 license = "MIT"
 
 bin = @["nimr"]

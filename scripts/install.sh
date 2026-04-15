@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# Build nimr, install the binary to ~/.local/bin, and optionally write zsh completion to
-# ~/.zsh/completions/_nimr via `nimr completion zsh`.
+# Build nimr, install the binary to ~/.local/bin, write zsh completion to
+# ~/.zsh/completions/_nimr (stdout from `nimr completion zsh`), and clear the run cache.
 # Run from anywhere; paths are resolved from this script.
 #
 # Usage:
@@ -39,9 +39,12 @@ main() {
   chmod +x "${local_bin}/nimr"
   echo "install.sh: installed ${local_bin}/nimr"
 
+  mkdir -p "${HOME}/.zsh/completions"
+  # Use dist binary here: first exec of the freshly copied ~/.local/bin/nimr can stall on macOS
+  # (Gatekeeper / notarization checks).
   set -x
-  "${local_bin}/nimr" completion zsh > ~/.zsh/completions/_nimr
-  "${local_bin}/nimr" cache-clear
+  "${dist_bin}" completion zsh > "${HOME}/.zsh/completions/_nimr"
+  "${dist_bin}" cache-clear
   set +x
 }
 

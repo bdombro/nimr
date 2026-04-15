@@ -1,4 +1,5 @@
 /dist/
+/nimr
 nimble.develop
 nimble.paths
 nimbledeps

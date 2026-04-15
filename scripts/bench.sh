@@ -12,8 +12,8 @@
 # What the numbers mean:
 #   Hyperfine reports mean ± σ over multiple runs. `--warmup` runs happen first and are
 #   excluded from those statistics, which mostly measures “warm” behavior (e.g. nimr’s
-#   content-hash cache hit, `nim r` not recompiling when nothing changed). For cold-start /
-#   first-compile behavior, run the commands manually or clear caches and use hyperfine
+#   metadata cache hit after stat(path/size/mtime), `nim r` not recompiling when nothing changed).
+#   For cold-start / first-compile behavior, run the commands manually or clear caches and use hyperfine
 #   without warmup / with `--runs 1` as a separate experiment.
 #
 # Prerequisites:
@@ -38,8 +38,8 @@ main() {
 
   # Paths are relative to repo root so they match docs and local mental model.
   hyperfine \
-    --warmup 3 --runs 100 \
-    -n "compiled " "./scripts/bench-assets/nimr-hello.bin" \
+    --warmup 3 --runs 50  --shell=none \
+    -n "compiled" "./scripts/bench-assets/nimr-hello.bin" \
     -n "nimr" "./scripts/bench-assets/nimr-hello" \
     -n "nim r (compile and run)" "./scripts/bench-assets/nim_r_hello.nim"
 }
