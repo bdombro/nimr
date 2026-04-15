@@ -1,20 +1,21 @@
 # nimr: Single-file Nim runner
 
-Run Nim files with a script-like workflow, fast reruns, and less setup friction. `nimr` reuses cached builds so unchanged programs start quickly, smooths over awkward filenames, and **auto-downloads dependencies** with the help of [grab](https://nimpkgs.org/?query=grab#/pkg/grab).
+Run Nim files with a script-like workflow, fast reruns, and less setup friction. `nimr` reuses cached builds so unchanged programs start quickly, smooths over awkward filenames, and **auto-installs Nimble dependencies**.
 
-It's kinda like using a shebang `#!/usr/bin/env -S nim r`, but no virtual machine and auto-downloads external dependencies using `grab` lib.
+It's kinda like using a shebang `#!/usr/bin/env -S nim r`, but skips recompile on no change, no virtual machine, and auto-installs external dependencies.
+
+Note: While nimr is convenient, it does add ~8ms startup delay compared to running a nim bin directly (see [Benchmark](#benchmark)).
 
 ## Usage
 
-Just chmod +x, add a shebang (`#!/usr/bin/env nimr`), and run the file (needs `nimr` on `PATH`) like [nimr-template](./examples/nimr-template)
+Just chmod +x, add a shebang (`#!/usr/bin/env nimr`), and run the file (needs `nimr` on `PATH`) like [nimr-stat](./examples/nimr-stat) or [nimr-neo](./examples/nimr-neo) (Neo + extra compiler flags).
 
 Your script, `foo`:
 ```python
 #!/usr/bin/env nimr
 
 import std/[options, ...]
-import grab
-grab "argsbarg"
+import argsbarg
 
 # ...rest of your code, `argsbarg` is auto-installed
 echo "bar"
@@ -24,6 +25,66 @@ echo "bar"
 chmod +x foo
 ./foo # --> prints "bar"
 ```
+
+
+## Benchmark
+
+We have a hyperfine benchmark (`./scripts/bench.sh`) to measure the cost of usign nimr vs alternatives:
+
+1. "compiled" - A fully compiled nim app ran directly
+2. "nimr" - An app that uses nimr that has been previously ran (aka warm). This means the app has already been compiled and cached, so nimr basically confirms the source has not changed and runs the compiled app, so the real difference vs compiled is doing the check and running the compiled app.
+3. "nim_r" - An app that uses `nim r` to compile and run
+
+**Results**
+
+The most important metric in the results is the min time taken per app:
+
+1. compiled - 1.7ms
+2. nimr - 9.9ms
+3. nimr_r - 135.5ms
+
+
+## Additional Features
+
+### Declaring dependencies (`# nimr-requires:`)
+
+Add a `# nimr-requires:` comment in the first 40 lines of your script (after the shebang).
+The value is a **comma-separated** list of Nimble package specs. Multiple directives are merged
+in order.
+
+```python
+# nimr-requires: neo
+# nimr-requires: argsbarg@1.3.2,chronos
+# nimr-requires: argsbarg@#head <-- use latest
+
+```
+
+Note: nimr caches the deps until the app changes or nimr cache is cleared -- so #head/#branch may fall behind as long as the cache is valid.
+
+On each run `nimr` checks whether each package is already installed (via `nimble path`). If not,
+it calls `nimble install -Y <spec>` and streams the progress. Then it passes `--path:…` to
+`nim c` so the packages are visible at compile time without needing a `.nimble` project file.
+
+The `# nimr-requires:` lines are part of the **content-hash cache key**, so changing a spec
+automatically triggers a fresh compile.
+
+See [nimr-neo](./examples/nimr-neo) and [nimr-arraymancer](./examples/nimr-arraymancer) for
+full working examples.
+
+### Extra `nim c` flags (`# nimr-flags:`)
+
+Add a `# nimr-flags:` comment in the first 40 lines to pass extra flags to `nim c`. The value
+is a **comma-separated** list of tokens (each segment is trimmed; empty segments are ignored).
+
+```python
+# nimr-flags: --mm:refc,-d:release
+```
+
+The `# nimr-flags:` lines are part of the **content-hash cache key**, so changing flags triggers
+a fresh compile.
+
+See [nimr-neo](./examples/nimr-neo) for a full script that combines `# nimr-requires:` with
+`# nimr-flags: --mm:refc` (Neo on Nim 2 often needs `--mm:refc`).
 
 ### IDE Integration
 

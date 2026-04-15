@@ -422,6 +422,13 @@ proc coreZshCompletionFileWrite(appBin, zshFileName, contents: string) =
       " to fpath before compinit, then restart zsh or run: compinit"
 
 
+## Runs ``cmd`` with ``args`` in ``workingDir`` and returns the exit code.
+proc coreProcessExitCodeWait(cmd: string; args: openArray[string]; workingDir: string): int =
+  let p = startProcess(cmd, args = args, workingDir = workingDir, options = {poParentStreams})
+  result = waitForExit(p)
+  close(p)
+
+
 ## True when ``stem`` is a valid Nim identifier stem.
 proc coreIdentStemIsNim(stem: string): bool =
   if stem.len == 0:
@@ -437,7 +444,87 @@ proc coreIdentStemIsNim(stem: string): bool =
   true
 
 
-## Drops a leading shebang so changing only the runner line does not bust the cache.
+## Reads ``# nimr-flags: flag1,flag2`` lines from the first 40 lines of source and returns the
+## tokens as a flat list passed to ``nim c``. Multiple directives are merged in order.
+proc coreNimFlagsFromSource(content: string): seq[string] =
+  result = @[]
+  var lineNum = 0
+  for line in content.splitLines:
+    inc lineNum
+    if lineNum > 40:
+      break
+    if line.startsWith("#!"):
+      continue
+    let s = line.strip
+    const prefix = "# nimr-flags:"
+    if not s.startsWith(prefix):
+      continue
+    for part in s[prefix.len .. ^1].split(','):
+      let w = part.strip
+      if w.len > 0:
+        result.add w
+
+
+## Returns true when the path has a ``.nim`` extension and a basename that is a valid Nim
+## module identifier (so the compiler can accept it without a temp rename).
+proc coreNimModuleFilenameIsCompatible(path: string): bool =
+  let (_, name, ext) = splitFile(path)
+  ext == ".nim" and coreIdentStemIsNim(name)
+
+
+## Reads ``# nimr-requires: pkg1,pkg2@ver`` lines from the first 40 lines of source and returns
+## the package specs as a flat list. Multiple directives are merged in order.
+proc coreNimRequiresFromSource(content: string): seq[string] =
+  result = @[]
+  var lineNum = 0
+  for line in content.splitLines:
+    inc lineNum
+    if lineNum > 40:
+      break
+    if line.startsWith("#!"):
+      continue
+    let s = line.strip
+    const prefix = "# nimr-requires:"
+    if not s.startsWith(prefix):
+      continue
+    for part in s[prefix.len .. ^1].split(','):
+      let w = part.strip
+      if w.len > 0:
+        result.add w
+
+
+## Ensures every package spec in ``pkgs`` is installed via ``nimble install -Y`` (output streams
+## live when a package is missing) and returns a ``--path:dir`` flag for each resolved location.
+## Exits with a message if nimble is not on PATH or any install or path-lookup fails.
+proc coreNimRequiresInstallPaths(pkgs: seq[string]): seq[string] =
+  result = @[]
+  if pkgs.len == 0:
+    return
+  let nimbleExe = findExe("nimble")
+  if nimbleExe.len == 0:
+    stderr.writeLine "[nimr] nimble is not on PATH; needed for # nimr-requires: ", pkgs.join(", ")
+    stderr.writeLine "[nimr] install Nim/Nimble: https://nim-lang.org/install.html"
+    quit(1)
+  for pkg in pkgs:
+    let pkgStem = pkg.split('@')[0].strip
+    let (pathPre, pathPreCode) = execCmdEx(nimbleExe & " --silent path " & pkgStem)
+    if pathPreCode != 0 or pathPre.strip.len == 0:
+      let installCode = coreProcessExitCodeWait(nimbleExe, ["install", "-Y", pkg], "")
+      if installCode != 0:
+        stderr.writeLine "[nimr] nimble install failed for: ", pkg
+        quit(1)
+    let (pathOut, pathCode) = execCmdEx(nimbleExe & " --silent path " & pkgStem)
+    if pathCode != 0 or pathOut.strip.len == 0:
+      stderr.writeLine "[nimr] nimble path failed for: ", pkgStem
+      quit(1)
+    for line in pathOut.splitLines:
+      let w = line.strip
+      if w.len > 0:
+        result.add "--path:" & w
+        break
+
+
+## Strips a leading shebang line so that swapping the runner path alone does not bust the cache.
 proc coreNormalizeForHash(content: string): string =
   if content.startsWith("#!"):
     let nl = content.find('\n')
@@ -447,13 +534,8 @@ proc coreNormalizeForHash(content: string): string =
   content
 
 
-## True when ``path`` uses a ``.nim`` extension and its basename is a valid Nim module name.
-proc coreNimModuleFilenameIsCompatible(path: string): bool =
-  let (_, name, ext) = splitFile(path)
-  ext == ".nim" and coreIdentStemIsNim(name)
-
-
-## Walks parents from ``walkFromFile``'s directory and returns the first ``pixi.toml`` path found.
+## Walks up the directory tree from ``walkFromFile`` and returns the first ``pixi.toml`` found,
+## or an empty string if none exists.
 proc corePixiTomlPathFind(walkFromFile: string): string =
   var dir = parentDir(expandFilename(absolutePath(walkFromFile)))
   while true:
@@ -467,18 +549,15 @@ proc corePixiTomlPathFind(walkFromFile: string): string =
   ""
 
 
-## Runs ``cmd`` with ``args`` in ``workingDir`` and returns the exit code.
-proc coreProcessExitCodeWait(cmd: string; args: openArray[string]; workingDir: string): int =
-  let p = startProcess(cmd, args = args, workingDir = workingDir, options = {poParentStreams})
-  result = waitForExit(p)
-  close(p)
-
-
-## Compiles ``nimSource`` to ``binaryPath``, preferring ``pixi run`` when a manifest exists.
-proc runCompileInvoke(nimSource: string; scriptPathForPixiWalk: string; binaryPath: string): int =
+## Compiles ``nimSource`` to ``binaryPath``. Uses ``pixi run nim c`` when a ``pixi.toml`` is found
+## above the script; otherwise invokes ``nim c`` directly.
+proc runCompileInvoke(nimSource: string; scriptPathForPixiWalk: string; binaryPath: string;
+    nimExtraFlags: openArray[string]): int =
   let workDir = parentDir(nimSource)
-  let compileTail = @[
-    "c",
+  var compileTail = @["c"]
+  for f in nimExtraFlags:
+    compileTail.add f
+  compileTail.add @[
     "--verbosity:0",
     "--hints:off",
     "-o:" & binaryPath,
@@ -501,7 +580,8 @@ proc runCompileInvoke(nimSource: string; scriptPathForPixiWalk: string; binaryPa
   coreProcessExitCodeWait(nimExe, compileTail, workDir)
 
 
-## Returns a filesystem stem suitable for a synthesized ``.nim`` module name.
+## Derives the base name for the synthesized ``.nim`` copy when the original filename is not a
+## valid Nim module identifier (e.g. ``nimr-neo`` → ``nimr_neo``).
 proc runNimStemForNaming(path: string): string =
   let (_, name, ext) = splitFile(path)
   if ext == ".nim":
@@ -510,7 +590,9 @@ proc runNimStemForNaming(path: string): string =
     name & ext
 
 
-## Sanitizes ``stem`` into a Nim-safe module stem.
+## Replaces any character that is not a Nim identifier character with ``_``, collapses runs of
+## underscores, strips leading/trailing underscores, and prepends ``_`` if the stem starts with
+## a digit.
 proc runNimStemSanitize(stem: string): string =
   var r = ""
   for c in stem:
@@ -529,7 +611,7 @@ proc runNimStemSanitize(stem: string): string =
   r
 
 
-## Executes ``binary`` and forwards ``args``, then quits with the child exit code.
+## Runs the compiled binary with ``args`` forwarded, then exits nimr with the same code.
 proc runBinaryExec(binary: string; args: openArray[string]) =
   let p = startProcess(binary, args = args, options = {poParentStreams})
   let code = waitForExit(p)
@@ -537,7 +619,8 @@ proc runBinaryExec(binary: string; args: openArray[string]) =
   quit(code)
 
 
-## Compiles and runs a Nim script.
+## Handler for the ``run`` subcommand: hashes the script, compiles on a cache miss (installing
+## any ``# nimr-requires:`` packages first), then executes the cached binary.
 proc nimrRunHandle(ctx: CliContext) =
   let scriptAndArgs = ctx.args
 
@@ -558,13 +641,15 @@ proc nimrRunHandle(ctx: CliContext) =
     quit(1)
 
   let raw = readFile(scriptPath)
-  let normalized = coreNormalizeForHash(raw)
-  let hashHex = $secureHash(normalized)
+  let hashHex = $secureHash(coreNormalizeForHash(raw))
   let binaryPath = cacheBinaryPathGet(hashHex)
 
   if fileExists(binaryPath):
     cacheBinaryLastUseTouch(binaryPath)
     runBinaryExec(binaryPath, args)
+
+  let requirePaths = coreNimRequiresInstallPaths(coreNimRequiresFromSource(raw))
+  let allFlags = requirePaths & coreNimFlagsFromSource(raw)
 
   var nimSource = scriptPath
   var tmpRoot = ""
@@ -575,7 +660,7 @@ proc nimrRunHandle(ctx: CliContext) =
     nimSource = tmpRoot / (stem & ".nim")
     writeFile(nimSource, raw)
 
-  let code = runCompileInvoke(nimSource, scriptPath, binaryPath)
+  let code = runCompileInvoke(nimSource, scriptPath, binaryPath, allFlags)
   if tmpRoot.len > 0:
     try:
       removeDir(tmpRoot)
@@ -594,62 +679,21 @@ proc coreRunHelpPrint() =
 Compile (if needed) and execute a Nim source file. Extra tokens are forwarded to the compiled
 program unchanged.
 
+Declare Nimble package dependencies in the script with ``# nimr-requires:`` (comma-separated
+specs); nimr installs them before compiling. Example:
+
+  # nimr-requires: neo,argsbarg@1.3.2
+
+Pass extra ``nim c`` flags in the script with ``# nimr-flags:`` (comma-separated tokens).
+Example:
+
+  # nimr-flags: --mm:refc,-d:release
+
 Usage:
 
 nimr run <script.nim> [args...]
 
 """.strip()
-
-
-## Compiles the first path when the content-hash cache misses, then runs the cached binary.
-## Remaining tokens are forwarded to the compiled program unchanged.
-proc runExecute(scriptAndArgs: seq[string]) =
-
-  if scriptAndArgs.len == 0:
-    stderr.writeLine "[nimr] run: expected <script> [args...]"
-    quit(1)
-
-  let script = scriptAndArgs[0]
-  let args =
-    if scriptAndArgs.len > 1:
-      scriptAndArgs[1 .. ^1]
-    else:
-      @[]
-
-  let scriptPath = expandFilename(absolutePath(script))
-  if not fileExists(scriptPath):
-    stderr.writeLine "[nimr] not a file: ", scriptPath
-    quit(1)
-
-  let raw = readFile(scriptPath)
-  let normalized = coreNormalizeForHash(raw)
-  let hashHex = $secureHash(normalized)
-  let binaryPath = cacheBinaryPathGet(hashHex)
-
-  if fileExists(binaryPath):
-    cacheBinaryLastUseTouch(binaryPath)
-    runBinaryExec(binaryPath, args)
-
-  var nimSource = scriptPath
-  var tmpRoot = ""
-  if not coreNimModuleFilenameIsCompatible(scriptPath):
-    tmpRoot = getTempDir() / ("nimr-build-" & hashHex[0 ..< 16])
-    createDir(tmpRoot)
-    let stem = runNimStemSanitize(runNimStemForNaming(scriptPath))
-    nimSource = tmpRoot / (stem & ".nim")
-    writeFile(nimSource, raw)
-
-  let code = runCompileInvoke(nimSource, scriptPath, binaryPath)
-  if tmpRoot.len > 0:
-    try:
-      removeDir(tmpRoot)
-    except CatchableError:
-      discard
-  if code != 0:
-    quit(code)
-
-  cacheStaleBinaryRemove(cacheDirNimrGet())
-  runBinaryExec(binaryPath, args)
 
 
 const
@@ -663,7 +707,7 @@ const
   ]
   ## Declarative CLI surface for zsh completion and usage lines.
   nimrCoreCliSurface = CoreCliSurfaceSpec(
-    defaultSubcommand: "",
+    defaultSubcommand: "run",
     prog: "nimr",
     topCommands: @[
       CoreCliSurfaceTopCmd(
