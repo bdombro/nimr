@@ -54,7 +54,7 @@ Auto-selecting nim language when scripts don't end with ".nim" in VSCode:
 nimr -h
 nimr run -h
 nimr run script.nim [args...]
-nimr cacheClear
+nimr cache-clear
 nimr completion zsh > ~/.zsh/completions/_nimr
 ```
 

@@ -39,6 +39,7 @@ main() {
   echo "install.sh: installed ${local_bin}/nimr"
 
   "${local_bin}/nimr" completion zsh > ~/.zsh/completions/_nimr
+  "${local_bin}/nimr" cache-clear
 }
 
 main "$@"

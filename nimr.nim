@@ -8,7 +8,7 @@
     nimr -h
     nimr run -h
     nimr run <script.nim> [args...]
-    nimr cacheClear
+    nimr cache-clear
     nimr completions-zsh
 
   Code Standards:
@@ -673,10 +673,10 @@ const
         usageLine: "run <script.nim> [args...]",
         zshTail: coreCliSurfaceZshTailFiles),
       CoreCliSurfaceTopCmd(
-        name: "cacheClear",
+        name: "cache-clear",
         nestedWords: @[],
         options: @[],
-        usageLine: "cacheClear",
+        usageLine: "cache-clear",
         zshTail: coreCliSurfaceZshTailNone),
       CoreCliSurfaceTopCmd(
         name: "completion",
@@ -694,7 +694,7 @@ const
 
 
 ## Main entry: ``cliFallbackWhenUnknown`` so ``nimr`` alone prints help and ``nimr script.nim``
-## runs ``run`` without spelling ``run`` (``cacheClear`` and flags still explicit).
+## runs ``run`` without spelling ``run`` (``cache-clear`` and flags still explicit).
 when isMainModule:
   let ps = commandLineParams()
   if ps.len >= 1 and ps[0] == "run":
@@ -705,7 +705,7 @@ when isMainModule:
     CliSchema(
       commands: @[
         cliLeaf(
-          "cacheClear",
+          "cache-clear",
           "Remove the nimr content-hash cache directory.",
           nimrCacheClearHandle,
         ),
