@@ -45,6 +45,7 @@ main() {
   set -x
   "${dist_bin}" completion zsh > "${HOME}/.zsh/completions/_nimr"
   "${dist_bin}" cache-clear
+  rm -rf "${HOME}/.nimble/bin/nimr" 2>/dev/null || true
   set +x
 }
 
