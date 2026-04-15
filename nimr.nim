@@ -9,7 +9,7 @@
     nimr run -h
     nimr run <script.nim> [args...]
     nimr cache-clear
-    nimr completions-zsh
+    nimr completion zsh
 
   Code Standards:
     - Commands that shell out to non-bundled binaries should check PATH, print install hints, and
@@ -726,7 +726,7 @@ const
         name: "completion",
         nestedWords: @["zsh"],
         options: @[],
-        usageLine: "completions-zsh",
+        usageLine: "completion zsh",
         zshTail: coreCliSurfaceZshTailNestedWords),
     ],
     topOptions: nimrTopHelpOpts,

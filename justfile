@@ -1,6 +1,11 @@
 _:
     just --list
 
+# Hyperfine: nimr vs `nim r` shebang vs compiled binary (see README **Benchmark**).
+bench:
+    ./scripts/bench.sh
+
+# Builds the nimr binary (no zips, no cross-compilation) → nimr/dist/nimr.
 build:
     ./scripts/build.sh
 
@@ -36,6 +41,3 @@ release VERSION:
 test:
     PATH=./dist:$PATH ./examples/nimr-stat
 
-# Hyperfine: nimr vs `nim r` shebang vs compiled binary (see README **Benchmark**).
-bench:
-    ./scripts/bench.sh

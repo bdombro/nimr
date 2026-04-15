@@ -6,6 +6,10 @@ It's kinda like using a shebang `#!/usr/bin/env -S nim r`, but skips recompile o
 
 Note: While nimr is convenient, it does add ~8ms startup delay compared to running a nim bin directly (see [Benchmark](#benchmark)).
 
+Also checkout my similar tools:
+- [gor](https://github.com/bdombro/nimr) for Golang
+- [mojor](https://github.com/bdombro/mojor) for Mojo
+
 ## Usage
 
 Just chmod +x, add a shebang (`#!/usr/bin/env nimr`), and run the file (needs `nimr` on `PATH`) like [nimr-stat](./examples/nimr-stat) or [nimr-neo](./examples/nimr-neo) (Neo + extra compiler flags).
@@ -39,9 +43,9 @@ We have a hyperfine benchmark (`./scripts/bench.sh`) to measure the cost of usig
 
 The most important metric in the results is the min time taken per app:
 
-1. compiled - 1.7ms
-2. nimr - 9.9ms
-3. nimr_r - 135.5ms
+1. compiled ~ 0.7ms
+2. nimr ~ 9.2ms
+3. nimr_r ~ 126ms
 
 
 ## Additional Features
@@ -153,7 +157,7 @@ That copies `dist/nimr` to `~/.local/bin/nimr`, then runs `nimr completion zsh`,
 Generate or refresh the completion script:
 
 ```sh
-nimr completions-zsh
+nimr completion zsh
 ```
 
 This installs `~/.zsh/completions/_nimr`. If the directory did not exist, `nimr` prints a warning when it creates it.
@@ -167,7 +171,7 @@ autoload -Uz compinit && compinit
 
 If you use **Oh My Zsh**, add the `fpath` line before Oh My Zsh is sourced (or wherever your theme loads `compinit`).
 
-**Release binary only:** run `nimr completions-zsh` after installing the binary, then configure `fpath` as above.
+**Release binary only:** run `nimr completion zsh` after installing the binary, then configure `fpath` as above.
 
 **Refresh if TAB seems stale**
 

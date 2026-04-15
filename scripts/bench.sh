@@ -36,41 +36,12 @@ main() {
     exit 1
   fi
 
-  local art="${NIMR_ROOT}/scripts/bench-assets"
-  local nimr_script="${art}/nimr-hello"
-  local nim_r_script="${art}/nim_r_hello.nim"
-  local compiled="${art}/nimr-hello.bin"
-
-  for f in "${nimr_script}" "${nim_r_script}" "${compiled}"; do
-    if [[ ! -f "${f}" ]]; then
-      echo "bench.sh: missing artifact: ${f}" >&2
-      exit 1
-    fi
-  done
-
-  # Prefer freshly built nimr from this checkout when present.
-  if [[ -x "${NIMR_ROOT}/dist/nimr" ]]; then
-    export PATH="${NIMR_ROOT}/dist:${PATH}"
-  fi
-
-  if ! command -v nimr >/dev/null 2>&1; then
-    echo "bench.sh: nimr not on PATH (and dist/nimr missing?). Build with: just build" >&2
-    exit 1
-  fi
-
-  if ! command -v nim >/dev/null 2>&1; then
-    echo "bench.sh: nim not on PATH (required for the nim r shebang script)" >&2
-    exit 1
-  fi
-
-  cd "${NIMR_ROOT}"
-
   # Paths are relative to repo root so they match docs and local mental model.
   hyperfine \
     --warmup 3 --runs 100 \
-    -n "nim r (compile and run)" "./scripts/bench-assets/nim_r_hello.nim" \
+    -n "compiled " "./scripts/bench-assets/nimr-hello.bin" \
     -n "nimr" "./scripts/bench-assets/nimr-hello" \
-    -n "compiled " "./scripts/bench-assets/nimr-hello.bin"
+    -n "nim r (compile and run)" "./scripts/bench-assets/nim_r_hello.nim"
 }
 
 main "$@"
