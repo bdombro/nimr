@@ -1,7 +1,7 @@
 #!/usr/bin/env nimr
 # Neo still uses ``shallowCopy`` internally; Nim 2 defaults need refc for that (see neo issue #50).
-# nimr-flags: --mm:refc
-# nimr-requires: neo
+# flags: --mm:refc
+# requires: neo
 
 # Demonstrate importing an external library and using a compiler flag
 

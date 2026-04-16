@@ -263,7 +263,7 @@ proc coreIdentStemIsNim(stem: string): bool =
   true
 
 
-## Reads ``# nimr-flags: flag1,flag2`` lines from the first 40 lines of source and returns the
+## Reads ``# flags: flag1,flag2`` lines from the first 40 lines of source and returns the
 ## tokens as a flat list passed to ``nim c``. Multiple directives are merged in order.
 proc coreNimFlagsFromSource(content: string): seq[string] =
   result = @[]
@@ -275,7 +275,7 @@ proc coreNimFlagsFromSource(content: string): seq[string] =
     if line.startsWith("#!"):
       continue
     let s = line.strip
-    const prefix = "# nimr-flags:"
+    const prefix = "# flags:"
     if not s.startsWith(prefix):
       continue
     for part in s[prefix.len .. ^1].split(','):
@@ -291,7 +291,7 @@ proc coreNimModuleFilenameIsCompatible(path: string): bool =
   ext == ".nim" and coreIdentStemIsNim(name)
 
 
-## Reads ``# nimr-requires: pkg1,pkg2@ver`` lines from the first 40 lines of source and returns
+## Reads ``# requires: pkg1,pkg2@ver`` lines from the first 40 lines of source and returns
 ## the package specs as a flat list. Multiple directives are merged in order.
 proc coreNimRequiresFromSource(content: string): seq[string] =
   result = @[]
@@ -303,7 +303,7 @@ proc coreNimRequiresFromSource(content: string): seq[string] =
     if line.startsWith("#!"):
       continue
     let s = line.strip
-    const prefix = "# nimr-requires:"
+    const prefix = "# requires:"
     if not s.startsWith(prefix):
       continue
     for part in s[prefix.len .. ^1].split(','):
@@ -321,7 +321,7 @@ proc coreNimRequiresInstallPaths(pkgs: seq[string]): seq[string] =
     return
   let nimbleExe = findExe("nimble")
   if nimbleExe.len == 0:
-    stderr.writeLine "[nimr] nimble is not on PATH; needed for # nimr-requires: ", pkgs.join(", ")
+    stderr.writeLine "[nimr] nimble is not on PATH; needed for # requires: ", pkgs.join(", ")
     stderr.writeLine "[nimr] install Nim/Nimble: https://nim-lang.org/install.html"
     quit(1)
   for pkg in pkgs:
@@ -437,7 +437,7 @@ proc runBinaryExec(binary: string; args: openArray[string]) =
 
 
 ## Handler for the ``run`` subcommand: ``stat``-based cache lookup, compile on miss (installing any
-## ``# nimr-requires:`` packages after reading the source), sibling purge of stale bins, then run
+## ``# requires:`` packages after reading the source), sibling purge of stale bins, then run
 ## the cached binary via ``execv``. A miss takes an exclusive ``flock`` on ``<binary>.lock`` so
 ## parallel invocations wait and reuse one compile.
 proc nimrRunHandle(ctx: CliContext) =
@@ -470,6 +470,8 @@ proc nimrRunHandle(ctx: CliContext) =
   if fileExists(binaryPath):
     runBinaryExec(binaryPath, args)
 
+  createDir(scriptCacheDir)
+
   let lockPath = cacheLockPathFromBinary(binaryPath)
   discard cacheCompileLockAcquire(lockPath)
   if fileExists(binaryPath):
@@ -478,8 +480,6 @@ proc nimrRunHandle(ctx: CliContext) =
   let raw = readFile(scriptPath)
   let requirePaths = coreNimRequiresInstallPaths(coreNimRequiresFromSource(raw))
   let allFlags = requirePaths & coreNimFlagsFromSource(raw)
-
-  createDir(scriptCacheDir)
 
   var nimSource = scriptPath
   var tmpRoot = ""
@@ -518,15 +518,15 @@ removed. There is no time-based eviction; use ``nimr cache-clear`` to remove the
 If two runs start a compile for the same cache entry before the binary exists, the second waits on
 ``flock`` and then reuses the first compile's output.
 
-Declare Nimble package dependencies in the script with ``# nimr-requires:`` (comma-separated
+Declare Nimble package dependencies in the script with ``# requires:`` (comma-separated
 specs); nimr installs them before compiling. Example:
 
-  # nimr-requires: neo,argsbarg@1.3.2
+  # requires: neo,argsbarg@1.3.2
 
-Pass extra ``nim c`` flags in the script with ``# nimr-flags:`` (comma-separated tokens).
+Pass extra ``nim c`` flags in the script with ``# flags:`` (comma-separated tokens).
 Example:
 
-  # nimr-flags: --mm:refc,-d:release
+  # flags: --mm:refc,-d:release
 
 Usage:
 

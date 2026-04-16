@@ -33,7 +33,7 @@ Minimal script `foo`:
 import std/[options, ...]
 import argsbarg
 
-# ... your code; argsbarg can be auto-installed via # nimr-requires:
+# ... your code; argsbarg can be auto-installed via # requires:
 echo "bar"
 ```
 
@@ -66,14 +66,14 @@ Rough minimum times (machine-dependent; see your own hyperfine output):
 
 ---
 
-## Dependencies: `# nimr-requires:`
+## Dependencies: `# requires:`
 
 In the **first 40 lines** of your script (after the shebang), list Nimble packages as a **comma-separated** list. You can use several lines; they are merged in order.
 
 ```nim
-# nimr-requires: neo
-# nimr-requires: argsbarg@1.3.2,chronos
-# nimr-requires: arraymancer@#head   # latest from git head
+# requires: neo
+# requires: argsbarg@1.3.2,chronos
+# requires: arraymancer@#head   # latest from git head
 ```
 
 **When it runs:** directives are handled on first run and are cached until the file changes.
@@ -82,12 +82,12 @@ In the **first 40 lines** of your script (after the shebang), list Nimble packag
 
 ---
 
-## Compiler flags: `# nimr-flags:`
+## Compiler flags: `# flags:`
 
 Also in the **first 40 lines**, comma-separated tokens (trimmed; empties ignored) are passed to `nim c`:
 
 ```nim
-# nimr-flags: --mm:refc,-d:release
+# flags: --mm:refc,-d:release
 ```
 
 
