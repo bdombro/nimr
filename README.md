@@ -1,5 +1,7 @@
 # nimr: single-file Nim runner
 
+**NOTICE** This app has been merged into my multi-language app -- https://github.com/bdombro/shebangsy
+
 **nimr** runs a Nim source file like a script: shebang, `chmod +x`, run. It can **skip recompiling** when nothing important changed, **install Nimble packages** for you, and **paper over** filenames that are not valid Nim module names.
 
 Similar idea to `#!/usr/bin/env -S nim r`, but nimr avoids a full compile when that metadata matches, does not use a VM for your app, lets you name it whatever you want, and can pull in **external Nimble dependencies** without a local `.nimble` project.
